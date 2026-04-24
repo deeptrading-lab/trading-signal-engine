@@ -5,6 +5,5 @@ alwaysApply: true
 
 # Review
 
-- [AGENTS.md](../../AGENTS.md)·PRD와 **범위·산출물**이 맞는가.
-- 비밀·키·토큰이 저장소에 들어가지 않았는가.
-- 커밋은 **한글 요약**이며 작업 단위가 과도하게 섞이지 않았는가.
+- 이 규칙의 공용 원본: `docs/rules/review.md`
+- Cursor 사용 시 이 파일이 적용되며, 상세 기준은 위 공용 문서를 따른다.

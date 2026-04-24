@@ -10,12 +10,15 @@
 | 위치 | 역할 |
 |------|------|
 | **이 파일 (`AGENTS.md`)** | 프로세스·PRD·커밋·배포 기준의 **단일 본문**. GitHub·리뷰·온보딩에서 먼저 읽습니다. |
-| **`.cursor/rules/*.mdc`** | **경로·주제별**로 적용되는 짧은 규칙(백엔드, 프론트, AI, 테스트, 리뷰 등). |
-| **`.cursor/agents/*.md`** | 역할(기획·백엔드 구현·리뷰·테스트·배포)별 **요약** — 세션에서 역할 전환 시 참고. |
-| **`.cursor/skills/**/SKILL.md`** | 스택별 심화 가이드(예: Spring API). 해당 작업 시에만 참고. |
+| **`docs/agents/*.md`** | 다른 IDE/CLI에서도 활용 가능한 **역할별 공용 문서(원본)**. |
+| **`docs/rules/*.md`** | 다른 IDE/CLI에서도 활용 가능한 **규칙 공용 문서(원본)**. |
+| **`skills/**/SKILL.md`** | 다른 IDE/CLI에서도 활용 가능한 **스택별 공용 스킬(원본)**. |
+| **`.cursor/rules/*.mdc`** | Cursor 적용용(경로·주제별). 공용 문서(`docs/rules`)를 참조하는 얇은 규칙. |
+| **`.cursor/agents/*.md`** | Cursor 역할 전환 힌트. 공용 문서(`docs/agents`)를 참조하는 얇은 문서. |
+| **`.cursor/skills/**/SKILL.md`** | Cursor 스킬 로딩용. 공용 스킬(`skills/`)과 내용 동기화. |
 
 **원칙:** 절차·역할 정의를 바꿀 때는 **먼저 `AGENTS.md`를 수정**한다.  
-`.cursor/rules`·`agents`·`skills`는 본문과 모순되지 않게 맞추고, 중복은 최소화한다.
+공용 원본(`docs/`, `skills/`)을 먼저 고치고, `.cursor/`는 본문과 모순되지 않게 맞추며 중복은 최소화한다.
 
 ---
 

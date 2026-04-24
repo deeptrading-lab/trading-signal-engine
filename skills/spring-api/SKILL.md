@@ -10,4 +10,3 @@ description: Spring Boot REST API 관례 (Trading Core 백엔드)
 - 예외는 공통 핸들러로 일관된 본문(코드·메시지)으로 응답.
 - 설정·시크릿은 코드에 하드코딩하지 않는다.
 
-> 공용 문서: `skills/spring-api/SKILL.md` (다른 IDE/CLI에서 참고용)

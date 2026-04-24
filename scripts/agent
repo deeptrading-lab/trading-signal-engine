@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+role="${1:-}"
+if [[ -z "$role" ]]; then
+  echo 'Usage: scripts/agent <planner|dev-backend|dev-ai|reviewer|tester|deployer>'
+  exit 2
+fi
+
+case "$role" in
+  planner)     file="docs/agents/planner.md" ;;
+  dev-backend) file="docs/agents/dev-backend.md" ;;
+  dev-ai)      file="docs/agents/dev-ai.md" ;;
+  reviewer)    file="docs/agents/reviewer.md" ;;
+  tester)      file="docs/agents/tester.md" ;;
+  deployer)    file="docs/agents/deployer.md" ;;
+  *)
+    echo "Unknown role: $role"
+    exit 2
+    ;;
+esac
+
+if [[ ! -f "$file" ]]; then
+  echo "Missing: $file"
+  exit 1
+fi
+
+cat "$file"
