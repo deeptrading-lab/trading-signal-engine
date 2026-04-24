@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 # 머지 완료된 로컬 브랜치와 PR 체크아웃 ref를 정리한다.
 #
+# 감지 범위:
+#   - true merge / fast-forward: git merge-base --is-ancestor 로 판정
+#   - squash / rebase merge:     branch tip 의 tree sha 가 main 히스토리에 있는지로 판정
+#   - pr-* ref:                  QA/Reviewer가 fetch로 만든 임시 ref
+#
 # 사용법:
-#   scripts/cleanup-merged-branches.sh          # 대화형 확인 후 삭제
-#   scripts/cleanup-merged-branches.sh --yes    # 확인 없이 바로 삭제
+#   scripts/cleanup-merged-branches.sh            # 대화형 확인 후 삭제
+#   scripts/cleanup-merged-branches.sh --yes      # 확인 없이 바로 삭제
 #   scripts/cleanup-merged-branches.sh --dry-run  # 삭제 대상만 표시
 
-set -euo pipefail
+set -eo pipefail
+# macOS 기본 bash 3.2 에서 `${array[@]}` 로 빈 배열 전개가 unbound variable 로 터지므로 -u 는 쓰지 않는다.
 
 MAIN_BRANCH="${MAIN_BRANCH:-main}"
 YES=0
@@ -17,7 +23,7 @@ for arg in "$@"; do
     --yes|-y) YES=1 ;;
     --dry-run|-n) DRY_RUN=1 ;;
     -h|--help)
-      sed -n '2,8p' "$0"
+      sed -n '2,13p' "$0"
       exit 0
       ;;
     *)
@@ -42,29 +48,67 @@ else
 fi
 
 echo
-echo "2/3 $MAIN_BRANCH 에 머지된 로컬 브랜치 탐색"
-merged_branches="$(git branch --merged "$MAIN_BRANCH" \
+echo "2/3 $MAIN_BRANCH 에 머지된 로컬 브랜치 탐색 (true/squash/rebase)"
+
+# 핵심 알고리즘: 브랜치 tip 의 tree sha 가 main 히스토리 어딘가에 있으면 머지된 것.
+# - true merge / fast-forward → branch tip 이 main 의 조상 (is-ancestor 로 먼저 잡힘)
+# - squash merge → main 의 squash 커밋 tree 가 branch tip tree 와 정확히 일치
+# - rebase merge → main 의 rebase 커밋 tree 들 중 하나가 branch tip tree 와 일치
+# tree sha 충돌은 현실적으로 0 이라 오탐 없음.
+
+true_merged=()
+squash_merged=()
+
+# main 히스토리의 모든 tree sha 를 한 번만 수집해 O(N) 비교 준비
+main_trees="$(git log "$MAIN_BRANCH" --format='%T')"
+
+# pr-* 를 제외한 로컬 브랜치를 순회하며 머지 여부 판정
+while IFS= read -r branch; do
+  [[ -z "$branch" ]] && continue
+  # true merge / fast-forward
+  if git merge-base --is-ancestor "$branch" "$MAIN_BRANCH" 2>/dev/null; then
+    true_merged+=("$branch")
+    continue
+  fi
+  # squash / rebase merge: 브랜치 tip tree 가 main 히스토리에 있는가?
+  branch_tree="$(git rev-parse "$branch^{tree}" 2>/dev/null || true)"
+  if [[ -n "$branch_tree" ]] && grep -Fxq "$branch_tree" <<< "$main_trees"; then
+    squash_merged+=("$branch")
+  fi
+done < <(git branch --list \
   | sed 's/^[* ]*//' \
   | grep -Ev "^(\*|$MAIN_BRANCH|HEAD)$" \
-  || true)"
+  | grep -Ev '^pr-')
 
-if [[ -z "$merged_branches" ]]; then
+if [[ ${#true_merged[@]} -eq 0 && ${#squash_merged[@]} -eq 0 ]]; then
   echo "  (정리할 머지된 브랜치 없음)"
 else
-  echo "$merged_branches" | sed 's/^/  - /'
+  for b in "${true_merged[@]}"; do
+    echo "  - $b  (true merge)"
+  done
+  for b in "${squash_merged[@]}"; do
+    echo "  - $b  (squash/rebase merge)"
+  done
 fi
 
 echo
 echo "3/3 PR 체크아웃 ref 탐색 (pr-*)"
-pr_refs="$(git branch --list 'pr-*' | sed 's/^[* ]*//' || true)"
-if [[ -z "$pr_refs" ]]; then
+pr_refs=()
+while IFS= read -r ref; do
+  [[ -z "$ref" ]] && continue
+  pr_refs+=("$ref")
+done < <(git branch --list 'pr-*' | sed 's/^[* ]*//')
+
+if [[ ${#pr_refs[@]} -eq 0 ]]; then
   echo "  (정리할 pr-* ref 없음)"
 else
-  echo "$pr_refs" | sed 's/^/  - /'
+  for r in "${pr_refs[@]}"; do
+    echo "  - $r"
+  done
 fi
 
-all_targets="$(printf '%s\n%s\n' "$merged_branches" "$pr_refs" | grep -v '^$' || true)"
-if [[ -z "$all_targets" ]]; then
+total=$(( ${#true_merged[@]} + ${#squash_merged[@]} + ${#pr_refs[@]} ))
+if [[ $total -eq 0 ]]; then
   echo
   echo "정리할 대상 없음. 종료."
   exit 0
@@ -86,16 +130,18 @@ if [[ $YES -eq 0 ]]; then
 fi
 
 echo
-while IFS= read -r branch; do
-  [[ -z "$branch" ]] && continue
-  # pr-* 는 보통 origin/pull/N/head fetch로만 만들어지므로 강제 삭제(-D) 허용.
-  # 그 외 머지된 브랜치는 안전 삭제(-d) 후, 혹시 남아있는 변경이 있으면 사용자가 직접 판단.
-  if [[ "$branch" == pr-* ]]; then
-    git branch -D "$branch"
-  else
-    git branch -d "$branch"
-  fi
-done <<< "$all_targets"
+# true merge 는 git 이 "merged" 로 인지하므로 안전 삭제(-d) 사용
+for branch in "${true_merged[@]}"; do
+  git branch -d "$branch"
+done
+# squash/rebase 머지는 git 이 "not merged" 로 보므로 강제 삭제(-D) 필요
+for branch in "${squash_merged[@]}"; do
+  git branch -D "$branch"
+done
+# pr-* 는 임시 fetch ref 라 강제 삭제(-D)
+for ref in "${pr_refs[@]}"; do
+  git branch -D "$ref"
+done
 
 echo
 echo "완료."
