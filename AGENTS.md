@@ -134,6 +134,7 @@ UI·유저 인터랙션이 PRD에 포함될 때 합류합니다.
 - **Slack 알림** 자동화(MVP 단계 핵심 채널), 장애·실패 알림 경로 확보
 - **인프라 비용 모니터링** (`README.md`의 Cost Strategy 범위 내 유지)
 - 운영 환경 헬스체크·로그 수집·경보 구성
+- **머지 후 브랜치 정리**: 로컬·원격 feature 브랜치, QA/Reviewer가 만든 `pr-<N>` 체크아웃 ref를 정리한다. 헬퍼는 `scripts/cleanup-merged-branches.sh`. GitHub UI로 직접 머지한 경우에도 이 정리는 수동으로 수행해야 한다(상세는 `.claude/agents/devops.md` §"머지 후 정리")
 
 ---
 
