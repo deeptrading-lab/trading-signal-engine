@@ -141,3 +141,82 @@ UI·유저 인터랙션이 PRD에 포함될 때 합류합니다.
 - 큰 작업은 `PM → (UX/UI →) Frontend/Backend Dev → QA → Code Reviewer → DevOps` 순으로 **한 번에 한 역할**을 요청하면 산출물이 섞이지 않는다.  
 - “PRD 초안만”, “이 PRD로 구현만”, “PRD 기준 테스트 계획만”, “PR 리뷰만”처럼 **출력물을 한 가지로 제한**한다.
 - 역할·스택 힌트: `docs/agents/`의 해당 파일을 열어 두거나, 메시지에 `역할: QA`처럼 명시한다.
+
+---
+
+## 에이전트 간 핸드오프 규약
+
+각 역할은 **정해진 파일 경로**에 산출물을 남기고, 다음 역할은 그 파일을 읽어 작업한다. 에이전트는 메모리가 아니라 **파일/PR/라벨**로 소통한다.
+
+| 역할 | 입력 | 출력 | 트리거 (라벨/상태) | 다음 |
+|------|------|------|--------------------|------|
+| PM | 사용자 아이디어, GitHub Issue | `docs/prd/<slug>.md` + Issue 업데이트 | 라벨 `prd-requested` | `prd-ready` |
+| UX/UI | `docs/prd/<slug>.md` (UI 포함 시) | `docs/design/<slug>.md` | 라벨 `prd-ready` + PRD에 UI 범위 | `design-ready` |
+| Backend Dev | `docs/prd/<slug>.md` | 브랜치 `feature/<slug>` + PR | 라벨 `prd-ready` / `design-ready` | PR + `impl-ready` |
+| Frontend Dev | `docs/prd/<slug>.md` + `docs/design/<slug>.md` | 브랜치 `feature/<slug>` + PR | 라벨 `design-ready` | PR + `impl-ready` |
+| QA | PRD + PR diff | `docs/qa/<slug>.md` | 라벨 `impl-ready` | `qa-passed` / `qa-failed` |
+| Code Reviewer | PR diff + `docs/qa/<slug>.md` | PR 리뷰 코멘트 | 라벨 `qa-passed` | `review-approved` / `review-changes-requested` |
+| DevOps | 승인된 PR | 머지 + push + Slack 알림 | 라벨 `review-approved` | `devops-ready` |
+
+### slug 규칙
+- kebab-case, 기능 단위: `slack-signal-approval`, `kis-rate-limit-retry`
+- PRD 파일명·브랜치·Issue 제목에 동일 slug 사용 → 검색·자동화 용이
+
+### 파일 레이아웃
+```
+docs/
+├── prd/<slug>.md         # PM 산출물
+├── design/<slug>.md      # UX/UI 산출물 (UI 있을 때만)
+└── qa/<slug>.md          # QA 리포트
+```
+
+---
+
+## GitHub 라벨 플로우
+
+두 사람이 동시에 일할 때 **어느 단계인지**를 Issue/PR 라벨로 표시한다. 에이전트는 `gh` CLI로 라벨을 읽고 쓴다.
+
+```
+prd-requested → prd-ready → design-ready → impl-wip → impl-ready
+              → qa-pending → qa-passed     (실패 시 qa-failed → impl-wip 로 회귀)
+              → review-pending → review-approved (또는 review-changes-requested → impl-wip)
+              → devops-ready (DevOps가 머지·push 후 제거)
+```
+
+필수 라벨(`gh label create`로 1회 생성):
+
+```bash
+gh label create prd-requested prd-ready design-ready impl-wip impl-ready \
+  qa-pending qa-passed qa-failed \
+  review-pending review-approved review-changes-requested devops-ready
+```
+
+---
+
+## 두 사람 작업 규칙 (락·동시성)
+
+- **작업 선점 = Issue assignee 설정**. 같은 slug를 두 명이 동시에 잡지 않는다.
+- **브랜치는 슬러그 하나당 하나**: `feature/<slug>`. 두 역할(예: FE + BE)이 같은 slug면 같은 브랜치에서 작업하거나 `feature/<slug>-fe`, `feature/<slug>-be`로 분리.
+- **PRD 수정은 PM만**. 구현 중 모호함이 나오면 QA/개발자는 PR·Issue 코멘트로 질문 → PM이 PRD를 갱신 → 라벨 되돌림.
+- **리뷰어 독립성**: PR 작성자와 다른 사람(또는 별도 cmux 패널/워크트리의 Reviewer 에이전트)이 리뷰. 본인 PR 자가-승인 금지.
+
+---
+
+## 자동 파이프라인 (`/pipeline`)
+
+[.claude/commands/pipeline.md](.claude/commands/pipeline.md) 슬래시 커맨드가 오케스트레이터 역할을 한다. 메인 Claude가 현재 라벨/파일 상태를 읽고, 다음 단계 서브에이전트([.claude/agents/](.claude/agents/))를 Agent 툴로 호출한다.
+
+사용 예:
+
+```
+/pipeline slack-signal-approval              # 현재 상태에서 다음 단계부터 이어서 실행
+/pipeline slack-signal-approval from=qa      # 특정 역할부터 재개
+/pipeline slack-signal-approval idea="..."   # 신규: PM부터 전체 파이프라인 실행
+```
+
+오케스트레이터는 다음을 지킨다.
+
+- 각 단계 산출물(파일 경로 또는 PR 번호)을 **명시적으로 다음 에이전트 프롬프트에 전달**한다.
+- 단계 실패·변경 요청 시 **멈추고 사용자에게 보고**한다.
+- **DevOps의 push·머지 단계는 사용자 확인 없이 자동 실행하지 않는다.**
+- 각 단계 완료 시 GitHub 라벨을 자동 업데이트한다.
