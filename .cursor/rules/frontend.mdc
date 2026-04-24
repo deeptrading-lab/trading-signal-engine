@@ -1,5 +1,5 @@
 ---
-description: Next.js 프론트 (비MVP) 작업 시 규칙
+description: Next.js 프론트 작업 시 규칙 (PRD에 UI가 포함될 때 적용)
 globs: frontend/**
 alwaysApply: false
 ---
