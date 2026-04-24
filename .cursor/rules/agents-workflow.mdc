@@ -16,11 +16,11 @@ alwaysApply: true
 
 ## 도메인·품질 규칙 (경로별)
 
-- `backend/**` → `backend.mdc` · 백엔드 에이전트: `.cursor/agents/backend-agent.md`
+- `backend/**` → `backend.mdc` · 공용 역할 문서: `docs/agents/dev-backend.md`
 - `frontend/**` → `frontend.mdc`
-- `ai/**` → `ai.mdc` · AI 에이전트: `.cursor/agents/ai-agent.md`
-- `**/test/**` → `test.mdc` · 테스터 에이전트: `.cursor/agents/test-agent.md`
-- 리뷰 최소 체크 → `review.mdc` · 리뷰어: `.cursor/agents/reviewer-agent.md`
+- `ai/**` → `ai.mdc` · 공용 역할 문서: `docs/agents/dev-ai.md`
+- `**/test/**` → `test.mdc` · 공용 역할 문서: `docs/agents/tester.md`
+- 리뷰 최소 체크 → `review.mdc` · 공용 역할 문서: `docs/agents/reviewer.md`
 
 ## 이 규칙 파일을 고칠 때
 
