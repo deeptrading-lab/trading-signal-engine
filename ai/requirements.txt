@@ -1,0 +1,9 @@
+# ai/ 파이프라인 런타임 의존성.
+# PRD: docs/prd/cost-aware-llm-pipeline.md (§6 Python 3.11+)
+
+# Anthropic Messages API SDK. 재시도 allow-list 가 SDK 예외 클래스에 직접 의존하므로
+# 업그레이드 시 ai/llm/retry.py::RETRYABLE_EXCEPTIONS 동기화 필수.
+anthropic>=0.97.0
+
+# 개발·테스트 의존성 (pytest 는 테스트 실행 시 필요).
+pytest>=8.0

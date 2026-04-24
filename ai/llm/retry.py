@@ -10,16 +10,21 @@
 """
 
 import functools
+import random
 import time
-from typing import Callable, TypeVar, Any
+from typing import Any, Callable, TypeVar
+
 from anthropic import (
     APIConnectionError,
-    RateLimitError,
     InternalServerError,
+    RateLimitError,
 )
 
 
-# 재시도 대상 예외 (allow-list)
+# 재시도 대상 예외 (allow-list).
+# PRD 정확히 3종만 재시도. SDK 업그레이드 시 RETRYABLE_EXCEPTIONS 검증 필수
+# (서브클래스가 새로 추가되면 exact-match 검사에 의해 자동 재시도되지 않으므로
+#  allow-list를 명시적으로 갱신해야 한다).
 RETRYABLE_EXCEPTIONS = (
     APIConnectionError,
     RateLimitError,
@@ -44,6 +49,9 @@ def narrow_retry(func: F) -> F:
     지수 백오프로 재시도한다. 그 외 예외(AuthenticationError, BadRequestError 등)는
     재시도 없이 즉시 전파된다.
 
+    exact-match: 서브클래스는 재시도하지 않는다. 이는 PRD가 요구한 "정확히 3종"
+    제약을 SDK 상속 구조 변경에도 견고하게 유지하기 위함이다.
+
     설정:
     - 최대 5회 시도
     - 초기 대기: 1초
@@ -60,14 +68,15 @@ def narrow_retry(func: F) -> F:
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         total_wait = 0.0
-        last_exception = None
 
         for attempt in range(MAX_RETRIES):
             try:
                 return func(*args, **kwargs)
-            except RETRYABLE_EXCEPTIONS as e:
-                # 재시도 가능한 예외
-                last_exception = e
+            except Exception as e:
+                # PRD 정확히 3종만 재시도. type()-기반 exact-match 로 서브클래스를
+                # 재시도 대상에서 배제한다. SDK 업그레이드 시 allow-list 동기화 필수.
+                if type(e) not in RETRYABLE_EXCEPTIONS:
+                    raise
 
                 # 마지막 시도면 raise
                 if attempt == MAX_RETRIES - 1:
@@ -75,27 +84,17 @@ def narrow_retry(func: F) -> F:
 
                 # 대기 시간 계산 (지수 백오프 + 지터)
                 base_wait = INITIAL_WAIT_SECONDS * (BACKOFF_MULTIPLIER ** attempt)
-                jitter = base_wait * JITTER_FRACTION * (2 * __import__("random").random() - 1)
-                wait_time = base_wait + jitter
-                wait_time = max(0.0, wait_time)  # 음수 방지
+                jitter = base_wait * JITTER_FRACTION * (2 * random.random() - 1)
+                wait_time = max(0.0, base_wait + jitter)  # 음수 방지
 
                 # 총 대기 상한 확인
                 if total_wait + wait_time > MAX_TOTAL_WAIT_SECONDS:
-                    # 상한을 넘으면 raise
                     raise
 
                 total_wait += wait_time
                 time.sleep(wait_time)
 
-            except Exception:
-                # 재시도 불가능한 예외는 즉시 propagate
-                raise
-
-        # 루프를 벗어나면 (통상적으로 도달하지 않음)
-        if last_exception:
-            raise last_exception
-
-    return wrapper  # type: ignore
+    return wrapper  # type: ignore[return-value]
 
 
 def _exponential_backoff_wait(
@@ -115,7 +114,6 @@ def _exponential_backoff_wait(
     반환값:
         대기 시간 (초).
     """
-    import random
     base_wait = initial_wait * (multiplier ** attempt)
     jitter = base_wait * jitter_fraction * (2 * random.random() - 1)
     return max(0.0, base_wait + jitter)

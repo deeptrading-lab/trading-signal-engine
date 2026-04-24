@@ -1,14 +1,17 @@
 """비용 추적기 테스트 (AC-C)."""
 
-import pytest
 from dataclasses import FrozenInstanceError
-from ai.llm import CostTracker, BudgetExceededError, Model
+
+import pytest
+
+from ai.llm import BudgetExceededError, CostTracker, Model
+from ai.llm.cost_tracker import CostTracker as CostTrackerCls  # from_usage 사용용
 
 
 class TestCostTracker:
     """CostTracker 클래스의 불변성·비용 추적 테스트."""
 
-    # AC-C1: 불변성 (add 호출 후 원본 불변, 새 인스턴스에만 변경)
+    # AC-C1: 불변성 (add 호출 후 원본 불변, 새 인스턴스에만 반영)
     def test_cost_tracker_immutability(self):
         """AC-C1: add() 호출 후 원본은 변경되지 않음."""
         original = CostTracker(budget_usd=1.0)
@@ -16,7 +19,7 @@ class TestCostTracker:
 
         new_tracker = original.add(input_tokens=1000, output_tokens=500, usd=0.4)
 
-        # 원본 변경 없음
+        # 원본 불변
         assert original.usd_spent == 0.0
         # 새 인스턴스에만 반영
         assert new_tracker.usd_spent == 0.4
@@ -42,33 +45,56 @@ class TestCostTracker:
         """AC-C4: frozen=True로 인해 속성 대입 시 FrozenInstanceError 발생."""
         tracker = CostTracker(budget_usd=1.0)
         with pytest.raises(FrozenInstanceError):
-            tracker.usd_spent = 99  # type: ignore
+            tracker.usd_spent = 99  # type: ignore[misc]
 
-    # AC-C5: __slots__으로 새 속성 추가 불가
+    # AC-C5: __slots__로 새 속성 추가 불가
     def test_cost_tracker_slots(self):
-        """AC-C5: __slots__ 사용으로 새 속성 추가 시 AttributeError 발생."""
+        """AC-C5: __slots__ 사용으로 새 속성 추가 시 속성 차단 예외 발생.
+
+        PRD 문언은 AttributeError 지만 Python 3.11 `@dataclass(frozen=True, slots=True)`
+        조합에서는 알려진 버그로 zero-arg `super()` 참조 실패가 먼저 일어나 TypeError
+        가 발생한다(속성 이름이 slots 에 없기 때문에 frozen __setattr__ 본문이 실행됨).
+        기능적 본질("새 속성 추가가 차단됨")을 검증하도록 두 예외 모두 허용.
+        """
         tracker = CostTracker(budget_usd=1.0)
-        with pytest.raises(AttributeError):
-            tracker.new_attribute = "should fail"  # type: ignore
+        with pytest.raises((AttributeError, TypeError)):
+            tracker.new_attribute = "should fail"  # type: ignore[attr-defined]
 
-    # 추가: 모델 기반 비용 계산
-    def test_cost_tracker_model_based_pricing(self):
-        """모델을 지정한 경우 단가 테이블에서 자동 계산."""
+    def test_cost_tracker_has_slots(self):
+        """__slots__ 정의 자체를 별도로 검증 (AC-C5 보강)."""
+        assert hasattr(CostTracker, "__slots__")
+        assert "input_tokens" in CostTracker.__slots__
+        assert "output_tokens" in CostTracker.__slots__
+        assert "usd_spent" in CostTracker.__slots__
+        assert "budget_usd" in CostTracker.__slots__
+
+    # add() 엄격 시그니처: usd 필수 키워드 인자
+    def test_cost_tracker_add_requires_usd_keyword(self):
+        """add()는 usd 키워드 인자를 필수로 받는다(PRD 엄격 시그니처)."""
+        tracker = CostTracker(budget_usd=1.0)
+        with pytest.raises(TypeError):
+            # usd 누락 → TypeError
+            tracker.add(input_tokens=100, output_tokens=50)  # type: ignore[call-arg]
+
+    # from_usage 팩토리: 모델 단가 기반 자동 계산
+    def test_cost_tracker_from_usage_haiku(self):
+        """from_usage(): HAIKU 단가로 자동 계산."""
         tracker = CostTracker(budget_usd=10.0)
-        # HAIKU: input $1/M, output $5/M
-        # 1000 input tokens = 1000/1M * $1 = $0.001
-        # 500 output tokens = 500/1M * $5 = $0.0025
-        # total = $0.0035
-        new_tracker = tracker.add(input_tokens=1000, output_tokens=500, model=Model.HAIKU)
+        # HAIKU: 1000 input * $1/M + 500 output * $5/M = 0.0035
+        new_tracker = CostTrackerCls.from_usage(
+            tracker, Model.HAIKU, input_tokens=1000, output_tokens=500
+        )
         assert new_tracker.usd_spent == pytest.approx(0.0035, abs=1e-6)
+        assert new_tracker.input_tokens == 1000
+        assert new_tracker.output_tokens == 500
 
-    def test_cost_tracker_sonnet_pricing(self):
-        """SONNET 모델 기반 비용 계산."""
+    def test_cost_tracker_from_usage_sonnet(self):
+        """from_usage(): SONNET 단가로 자동 계산."""
         tracker = CostTracker(budget_usd=10.0)
-        # SONNET: input $3/M, output $15/M
-        # 1000 input = $0.003, 500 output = $0.0075
-        # total = $0.0105
-        new_tracker = tracker.add(input_tokens=1000, output_tokens=500, model=Model.SONNET)
+        # SONNET: 1000 input * $3/M + 500 output * $15/M = 0.0105
+        new_tracker = CostTrackerCls.from_usage(
+            tracker, Model.SONNET, input_tokens=1000, output_tokens=500
+        )
         assert new_tracker.usd_spent == pytest.approx(0.0105, abs=1e-6)
 
     def test_cost_tracker_cumulative(self):
@@ -82,18 +108,6 @@ class TestCostTracker:
 
         tracker = tracker.add(input_tokens=500, output_tokens=250, usd=0.15)
         assert tracker.usd_spent == pytest.approx(0.95, abs=1e-6)
-
-    def test_cost_tracker_cannot_mix_usd_and_model(self):
-        """usd와 model을 동시에 지정 불가."""
-        tracker = CostTracker(budget_usd=10.0)
-        with pytest.raises(ValueError):
-            tracker.add(input_tokens=1000, output_tokens=500, usd=0.5, model=Model.HAIKU)
-
-    def test_cost_tracker_must_specify_usd_or_model(self):
-        """usd 또는 model 중 하나는 반드시 지정."""
-        tracker = CostTracker(budget_usd=10.0)
-        with pytest.raises(ValueError):
-            tracker.add(input_tokens=1000, output_tokens=500)
 
     def test_cost_tracker_budget_validation_boundary(self):
         """예산 경계값 테스트."""
