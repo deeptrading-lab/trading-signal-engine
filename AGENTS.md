@@ -21,7 +21,7 @@
 
 ---
 
-## 멀티 에이전트 역할 (7인 체제)
+## 멀티 에이전트 역할 (7인 체제 + Manager)
 
 한 대화 안에서도 역할을 명시해 전환합니다. 예: `역할: PM으로 PRD만 작성해줘`.
 
@@ -36,6 +36,7 @@
 | 5 | **QA (검증)** | PRD의 **수용 기준(AC)** → 테스트 항목·체크리스트 → 실행. 에지 케이스(예: 거래소 서버 다운) 포함 | PRD와 무관한 임의 테스트만으로 통과 판정 |
 | 6 | **Code Reviewer** | PR의 **코드 퀄리티·아키텍처·클린 코드** 감시, 머지 승인 게이트 | PRD 수용 테스트 실행(= QA 영역) |
 | 7 | **DevOps (배포)** | **유효한 커밋**일 때만 `git push`, CI/CD·운영 모니터링, **Slack 알림/인프라 비용** 관리 | 실패한 테스트·깨진 빌드 상태에서 push |
+| + | **Manager (관찰·보고)** | 전체 slug 현황·블록·우선순위를 **read-only**로 조회해 리포트. `/status` 커맨드 진입점. | 라벨 변경·머지·파일 쓰기·다른 에이전트 실행 트리거 |
 
 ### 권장 흐름
 
@@ -220,3 +221,24 @@ gh label create prd-requested prd-ready design-ready impl-wip impl-ready \
 - 단계 실패·변경 요청 시 **멈추고 사용자에게 보고**한다.
 - **DevOps의 push·머지 단계는 사용자 확인 없이 자동 실행하지 않는다.**
 - 각 단계 완료 시 GitHub 라벨을 자동 업데이트한다.
+
+---
+
+## 현황 조회 (`/status`)
+
+실행은 `/pipeline`이 담당하고, **보고는 `/status`** 가 담당한다. 역할이 겹치지 않도록 `/status`가 호출하는 `manager` 서브에이전트는 **read-only**다.
+
+사용 예:
+
+```
+/status                              # 모든 slug 현황(표 + 블록 경고 + 추천 액션)
+/status slack-signal-approval        # 특정 slug 상세
+/status --write                      # 리포트를 docs/STATUS.md 에 저장
+/status --for @friend                # 특정 사용자 기준 우선순위 추천
+```
+
+매니저는 다음을 지킨다.
+
+- **read-only**: 라벨·PR·파일 변경 금지. `gh ... list`·`git log`·파일 읽기만 허용.
+- 실행 제안은 항상 **`/pipeline` 호출 안내**로 마무리한다 (자동 실행 금지).
+- 기본 출력은 콘솔. `--write` 옵션일 때만 `docs/STATUS.md` 갱신.
