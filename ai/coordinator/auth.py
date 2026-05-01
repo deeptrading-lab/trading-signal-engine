@@ -36,6 +36,29 @@ def is_self_message(event: Mapping[str, Any], self_bot_user_id: str | None) -> b
     return False
 
 
+def is_handleable_message_subtype(event: Mapping[str, Any]) -> bool:
+    """
+    명령 라우팅 대상 이벤트인지 판정 (PRD: slack-message-subtype-guard §3.1).
+
+    whitelist 정책 — 일반 사용자 텍스트 메시지만 True 로 판정한다:
+    - `subtype` 키가 이벤트에 없는 경우
+    - `subtype` 값이 None 인 경우
+    - `subtype` 값이 빈 문자열인 경우
+
+    그 외 모든 subtype(`message_changed`, `message_deleted`, `thread_broadcast`,
+    `file_share`, `bot_message`, `channel_join`, `channel_leave`, 그리고 알려지지
+    않은 신규 subtype 등)은 False 를 반환해 보수적으로 무시한다.
+
+    부수효과 없음 (로깅은 호출부에서 수행).
+    """
+    if not isinstance(event, Mapping):
+        return False
+    subtype = event.get("subtype")
+    if subtype is None or subtype == "":
+        return True
+    return False
+
+
 def is_allowed_sender(
     user_id: str | None,
     allowed_user_ids: Iterable[str],

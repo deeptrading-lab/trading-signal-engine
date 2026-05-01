@@ -223,7 +223,7 @@ ai/coordinator/
 - 슬래시 커맨드, Block Kit 인터랙티브 컴포넌트
 - 클라우드 배포 (Cloud Run / Lambda 등 — Socket Mode 대신 HTTP webhook으로 전환)
 - `python-dotenv` 자동 로딩 (매번 `source .env` 불필요하게)
-- 메시지 subtype 가드 (`message_changed`/`message_deleted`/`thread_broadcast` 무시)
+- 메시지 subtype 가드 — 구현됨 (PRD: [`slack-message-subtype-guard`](../prd/slack-message-subtype-guard.md))
 
 ---
 

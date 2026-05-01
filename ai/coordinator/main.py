@@ -19,7 +19,12 @@ import signal
 import sys
 from typing import Any
 
-from ai.coordinator.auth import is_allowed_sender, is_self_message, mask_user_id
+from ai.coordinator.auth import (
+    is_allowed_sender,
+    is_handleable_message_subtype,
+    is_self_message,
+    mask_user_id,
+)
 from ai.coordinator.config import ConfigError, CoordinatorConfig, load_config
 from ai.coordinator.handlers import route_command
 
@@ -67,6 +72,17 @@ def build_app(config: CoordinatorConfig, logger: logging.Logger) -> Any:
 
         # MVP 는 DM(IM)만 처리. 그 외 채널 타입은 무시.
         if event.get("channel_type") != "im":
+            return
+
+        # PRD slack-message-subtype-guard: 편집·삭제·시스템 메시지 등은 조용히 무시.
+        if not is_handleable_message_subtype(event):
+            logger.info(
+                "처리 대상이 아닌 메시지 이벤트를 무시했습니다 "
+                "(subtype=%s, sender=%s, type=%s)",
+                event.get("subtype"),
+                mask_user_id(event.get("user")),
+                event.get("type"),
+            )
             return
 
         sender = event.get("user")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ai.coordinator.auth import (
     is_allowed_sender,
+    is_handleable_message_subtype,
     is_self_message,
     mask_user_id,
 )
@@ -65,6 +66,59 @@ class TestIsSelfMessage:
     def test_non_mapping_input_is_not_self(self):
         assert is_self_message(None, "U_BOT") is False  # type: ignore[arg-type]
         assert is_self_message("not a dict", "U_BOT") is False  # type: ignore[arg-type]
+
+
+class TestIsHandleableMessageSubtype:
+    """PRD slack-message-subtype-guard §3.1: subtype whitelist 가드."""
+
+    def test_event_without_subtype_key_is_handleable(self):
+        # T-1: subtype 키가 아예 없는 일반 메시지.
+        event = {"type": "message", "text": "ping"}
+        assert is_handleable_message_subtype(event) is True
+
+    def test_event_with_subtype_none_is_handleable(self):
+        # T-2: subtype 값이 None.
+        event = {"type": "message", "subtype": None, "text": "ping"}
+        assert is_handleable_message_subtype(event) is True
+
+    def test_event_with_subtype_empty_string_is_handleable(self):
+        # T-3: subtype 값이 빈 문자열.
+        event = {"type": "message", "subtype": "", "text": "ping"}
+        assert is_handleable_message_subtype(event) is True
+
+    def test_message_changed_is_not_handleable(self):
+        # T-4: 메시지 편집 이벤트는 무시.
+        event = {
+            "type": "message",
+            "subtype": "message_changed",
+            "message": {"text": "수정된 본문"},
+        }
+        assert is_handleable_message_subtype(event) is False
+
+    def test_message_deleted_is_not_handleable(self):
+        # T-5: 메시지 삭제 이벤트는 무시.
+        event = {"type": "message", "subtype": "message_deleted"}
+        assert is_handleable_message_subtype(event) is False
+
+    def test_bot_message_is_not_handleable(self):
+        # T-6: 다른 봇/외부 통합이 보낸 메시지.
+        event = {
+            "type": "message",
+            "subtype": "bot_message",
+            "user": "U_OTHER",
+            "text": "외부 알림",
+        }
+        assert is_handleable_message_subtype(event) is False
+
+    def test_unknown_future_subtype_is_not_handleable(self):
+        # T-7: 알려지지 않은 신규 subtype 도 보수적(whitelist)으로 거부.
+        event = {"type": "message", "subtype": "foo_unknown_future"}
+        assert is_handleable_message_subtype(event) is False
+
+    def test_non_mapping_input_is_not_handleable(self):
+        # 방어적: dict 가 아닌 입력은 즉시 False.
+        assert is_handleable_message_subtype(None) is False  # type: ignore[arg-type]
+        assert is_handleable_message_subtype("not a dict") is False  # type: ignore[arg-type]
 
 
 class TestMaskUserId:
