@@ -56,7 +56,7 @@
      - `set -a && source .env && set +a` 단계를 **제거** 하거나, "자동 로딩되므로 별도 export 불필요" 안내로 대체한다.
      - `.env` 파일이 프로젝트 루트에 존재하면 자동 인식됨을 명시.
      - 운영 환경에서 셸 export 가 우선됨을 한 줄로 명시(혼동 방지).
-   - 트레이딩 도메인 키워드(예: `signal`, `trade`, `desk`, `order` 등) 노출 금지 원칙은 그대로 유지.
+   - 도메인 키워드 노출 금지 원칙은 그대로 유지 — 정확한 정책 목록은 [`ai/coordinator/_compliance.py`](../../ai/coordinator/_compliance.py)의 `FORBIDDEN_KEYWORDS` 단일 정의 지점을 참조.
 
 4. **테스트 (pytest, 단위)**
    - `.env` 가 있고 셸 환경변수가 없을 때 자동 로딩되는지 검증 (tempfile 로 가짜 `.env` + 모킹된 cwd / `find_dotenv` 경로).
@@ -106,7 +106,7 @@ QA 가 그대로 테스트로 변환할 수 있도록 검증 가능한 문장으
 ### 문서 (AC-D)
 - **AC-D1**: `docs/references/slack-coordinator-bot-setup.md` §3-3 가 새 사용법(자동 로딩, 한 줄 실행)을 반영한다.
 - **AC-D2**: 같은 문서에 "셸 export 가 우선됨" 한 줄이 명시된다(운영 혼동 방지).
-- **AC-D3**: 위 문서 변경분에 트레이딩 도메인 키워드(`signal`, `trade`, `desk`, `order`, `position` 등)가 새로 추가되지 않는다.
+- **AC-D3**: 위 문서 변경분에 도메인 키워드가 새로 추가되지 않는다 — 정확한 정책 목록은 [`ai/coordinator/_compliance.py`](../../ai/coordinator/_compliance.py)의 `FORBIDDEN_KEYWORDS` 단일 정의 지점을 참조.
 
 ### 의존성 (AC-Dep)
 - **AC-Dep1**: `ai/requirements.txt` 에 `python-dotenv >= 1.0` 이 명시되어 있다(버전 핀 형식은 기존 파일의 컨벤션 따름).

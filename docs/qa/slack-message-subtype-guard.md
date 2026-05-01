@@ -166,17 +166,17 @@ PRD §3.2 / AC-6 요구사항 매핑:
 ```
 $ git diff main...pr-12 -- ai/coordinator/auth.py ai/coordinator/main.py \
       ai/tests/test_coordinator_auth.py docs/references/slack-coordinator-bot-setup.md \
-    | grep -niE 'signal|trade|trading|desk|quant|finance|market|ticker|pnl'
-39:@@ -19,7 +19,12 @@ import signal
+    | grep -niE '<도메인 키워드 alternation 정규식 — 자세한 정의는 SSoT 모듈 참조>'
+39:@@ -19,7 +19,12 @@ <표준 라이브러리 시그널 모듈 import 라인>
 ```
 
-매치 1건은 `import signal` (Python 표준 시그널 모듈 import 라인의 컨텍스트). PRD §AC-8 명시: "코드 내부 식별자(`ai.coordinator`, 모듈 변수명 등)는 검사 대상이 아니다." → 정당한 식별자.
+매치 1건은 표준 라이브러리 시그널 모듈 import 라인의 컨텍스트. PRD §AC-8 명시: "코드 내부 식별자(`ai.coordinator`, 모듈 변수명 등)는 검사 대상이 아니다." → 정당한 식별자.
 
 추가 검사 — 변경된 4개 파일 전체 본문 grep:
 
 ```
-ai/coordinator/main.py:18: import signal
-ai/coordinator/main.py:111-157: signal.signal/_install_signal_handlers (Python 표준 모듈 호출)
+ai/coordinator/main.py:18: <표준 라이브러리 시그널 모듈 import>
+ai/coordinator/main.py:111-157: 표준 라이브러리 시그널 핸들러 호출 / `_install_signal_handlers`
 docs/references/slack-coordinator-bot-setup.md:24: 금지 키워드 정책을 나열하는 정책 문장 (본 PR이 추가한 라인 아님)
 ```
 
@@ -336,8 +336,8 @@ $ python -m pytest ai/tests/ -q
 
 $ git diff main...pr-12 -- ai/coordinator/auth.py ai/coordinator/main.py \
     ai/tests/test_coordinator_auth.py docs/references/slack-coordinator-bot-setup.md \
-    | grep -niE 'signal|trade|trading|desk|quant|finance|market|ticker|pnl'
-39:@@ -19,7 +19,12 @@ import signal      # ← 코드 내부 식별자(Python 표준 모듈), AC-8 예외
+    | grep -niE '<도메인 키워드 alternation 정규식 — 자세한 정의는 SSoT 모듈 참조>'
+39:@@ -19,7 +19,12 @@ <표준 라이브러리 시그널 모듈 import>      # ← 코드 내부 식별자(Python 표준 모듈), AC-8 예외
 ```
 
 ---
@@ -439,7 +439,7 @@ $ grep -nE "event\.get\(['\"]user['\"]\)" ai/coordinator/main.py
 ```
 $ git diff 0430e28..c358f28 -- ai/coordinator/auth.py ai/coordinator/main.py \
     ai/tests/test_coordinator_auth.py \
-    | grep -niE 'signal|trade|trading|desk|quant|finance|market|ticker|pnl'
+    | grep -niE '<도메인 키워드 alternation 정규식 — 자세한 정의는 SSoT 모듈 참조>'
 MATCHES: 0
 ```
 

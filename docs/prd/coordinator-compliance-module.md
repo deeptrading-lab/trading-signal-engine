@@ -12,7 +12,7 @@
 
 ## 1. 배경 / 문제
 
-회사 Slack 워크스페이스는 동료 가시성이 있는 환경이고, 코디네이터 봇 표시명·응답 텍스트·로그 등 외부 노출 텍스트에는 특정 도메인 키워드(영문 예: `signal`, `trade`, `trading`, `desk`, `quant`, `finance`, `market`, `ticker`, `pnl`)가 등장해서는 안 된다. 이는 봇 네이밍 제약과 동일한 정책이다.
+회사 Slack 워크스페이스는 동료 가시성이 있는 환경이고, 코디네이터 봇 표시명·응답 텍스트·로그 등 외부 노출 텍스트에는 도메인 키워드가 등장해서는 안 된다 — 정확한 정책 목록은 [`ai/coordinator/_compliance.py`](../../ai/coordinator/_compliance.py)의 `FORBIDDEN_KEYWORDS` 단일 정의 지점을 참조한다. 이는 봇 네이밍 제약과 동일한 정책이다.
 
 현재 이 정책의 검사 책임은 **두 곳에 흩어져 있고, 한쪽은 비어 있다.**
 
@@ -53,13 +53,13 @@
 
 1. `FORBIDDEN_KEYWORDS: frozenset[str]`
    - 도메인 금지 키워드의 **단일 정의 지점**.
-   - 초기값(영어, 소문자): `signal`, `trade`, `trading`, `desk`, `quant`, `finance`, `market`, `ticker`, `pnl`.
+   - 초기값은 영어 소문자 단어 9종 — 정확한 키워드 집합은 모듈 자체의 정의 한 줄을 참조.
    - 추가/삭제 시 이 모듈만 수정한다.
 
 2. `find_forbidden_keywords(text: str) -> list[str]`
    - 텍스트에서 발견된 금지 키워드를 **정렬·중복 제거된 리스트**로 반환한다.
    - 대소문자 무시(`re.IGNORECASE`).
-   - **단어 경계** 기준(`\b`) — 영단어로 등장할 때만 매치. 식별자 부분 매치는 회피한다(예: `signature`는 `signal`로 매치되지 않음).
+   - **단어 경계** 기준(`\b`) — 영단어로 등장할 때만 매치. 식별자 부분 매치는 회피한다(예: `signature` 같은 부분 일치 식별자는 도메인 키워드로 매치되지 않음).
    - 매치 없으면 빈 리스트.
 
 3. `assert_no_forbidden(text: str, *, context: str = "") -> None`
@@ -127,15 +127,15 @@
 검증 가능한 문장으로 기술한다. QA는 각 항목당 최소 1개 이상의 테스트 항목을 만든다.
 
 - **AC-1 (모듈 정의)**: `ai/coordinator/_compliance.py` 가 존재하고, 다음 3 심볼을 export 한다 — `FORBIDDEN_KEYWORDS`(`frozenset[str]`), `find_forbidden_keywords`, `assert_no_forbidden`.
-- **AC-2 (단어 경계)**: `find_forbidden_keywords("signature analysis")` 는 빈 리스트를 반환한다(부분 매치 없음). `find_forbidden_keywords("Signal received")` 는 `["signal"]` 을 반환한다(대소문자 무시 + 단어 경계 매치).
+- **AC-2 (단어 경계)**: 부분 일치 식별자(예: `signature analysis`)는 빈 리스트를 반환한다. 도메인 키워드가 영단어로 등장하는 입력(대소문자 혼합 포함)은 해당 키워드를 정렬·소문자 리스트로 반환한다. 정책 키워드 목록은 [`ai/coordinator/_compliance.py`](../../ai/coordinator/_compliance.py)의 `FORBIDDEN_KEYWORDS` 단일 정의 지점을 참조.
 - **AC-3 (정렬·중복 제거)**: 동일 키워드가 여러 번 등장하거나 여러 키워드가 섞여 있을 때, 반환 리스트는 **정렬되고 중복이 제거된** 형태다.
 - **AC-4 (테스트 마이그레이션)**: `ai/tests/test_coordinator_handlers.py` 는 로컬 `FORBIDDEN_KEYWORDS` / `assert_no_forbidden_keywords` 정의를 더 이상 갖지 않는다(`grep` 으로 0건). 대신 `ai.coordinator._compliance` 를 import 한다.
-- **AC-5 (runtime 차단)**: `safe_say(say, "test text contains signal here")` 호출 시 — (a) 원본 텍스트가 `say` 인자로 전달되지 않는다, (b) fallback 메시지("응답 생성 중 문제가 발생했습니다. 다시 시도해 주세요.")가 `say` 로 발사된다, (c) `logger.error` 가 정확히 1회 호출되며 `extra={"matched": ["signal"], ...}` 를 포함한다.
+- **AC-5 (runtime 차단)**: 도메인 키워드를 포함한 텍스트로 `safe_say(say, ...)` 를 호출하면 — (a) 원본 텍스트가 `say` 인자로 전달되지 않는다, (b) fallback 메시지("응답 생성 중 문제가 발생했습니다. 다시 시도해 주세요.")가 `say` 로 발사된다, (c) `logger.error` 가 정확히 1회 호출되며 `extra={"matched": [...], ...}` 에 매치된 키워드 목록(소문자·정렬)이 포함된다.
 - **AC-6 (runtime 통과)**: `safe_say(say, "안녕하세요. 도움이 필요하신가요?")` 호출 시 — 원본 텍스트가 `say` 로 그대로 발사되고, ERROR 로그는 발생하지 않는다.
 - **AC-7 (fallback 자체 검증)**: fallback 메시지 텍스트를 `find_forbidden_keywords` 에 넣었을 때 빈 리스트를 반환한다(자기 자신이 정책 위반이 되는 일이 없음을 보증).
 - **AC-8 (회귀)**: 기존 145개 테스트 + 신규 테스트가 모두 통과한다 (`pytest ai/tests/`).
 - **AC-9 (가이드 갱신)**: `docs/references/slack-coordinator-bot-setup.md` §5 에 새 모듈 경로가 한 줄 추가되어 있다.
-- **AC-10 (정책 노출 0)**: 본 PRD 본문, 새 모듈 코드·docstring, 신규 테스트 파일, 가이드 갱신분, 커밋 메시지, PR 본문 어디에도 도메인 키워드(`signal`/`trade`/`trading`/`desk`/`quant`/`finance`/`market`/`ticker`/`pnl`) 의 영단어 노출이 없다 — **테스트 케이스 안의 입력 문자열은 예외**(검사 대상이므로 필연적으로 포함). 단, 테스트 파일은 외부에 직접 발사되지 않으므로 정책 위반이 아니다.
+- **AC-10 (정책 노출 0)**: 본 PRD 본문, 새 모듈 코드·docstring, 신규 테스트 파일, 가이드 갱신분, 커밋 메시지, PR 본문 어디에도 도메인 키워드의 영단어 노출이 없다(정확한 정책 목록은 [`ai/coordinator/_compliance.py`](../../ai/coordinator/_compliance.py)의 `FORBIDDEN_KEYWORDS` 단일 정의 지점을 참조) — **테스트 케이스 안의 입력 문자열은 예외**(검사 대상이므로 필연적으로 포함). 단, 테스트 파일은 외부에 직접 발사되지 않으므로 정책 위반이 아니다.
 
 ---
 
@@ -143,7 +143,7 @@
 
 - **Python**: 3.11+ 가정 (기존 `ai/` 와 동일). `frozenset[str]` 제네릭 표기 사용 가능.
 - **의존성**: 표준 라이브러리만 사용. 신규 패키지 추가 없음.
-- **검사 스코프**: "사용자 노출 텍스트" 한정. 코드 식별자, import 문(`from signal import ...` 같은 표준 라이브러리 모듈명 등)은 검사 대상이 아니다 — `_compliance.py` 자체는 텍스트만 받으며, AST/소스 파싱은 하지 않는다.
+- **검사 스코프**: "사용자 노출 텍스트" 한정. 코드 식별자, 표준 라이브러리 모듈명 import 문 등은 검사 대상이 아니다 — `_compliance.py` 자체는 텍스트만 받으며, AST/소스 파싱은 하지 않는다.
 - **단어 경계 정의**: Python `re` 모듈의 `\b` 를 그대로 사용한다. 멀티바이트(한글) 경계는 정의되지 않으므로, 영문 단어 매칭 외 동작은 보장하지 않는다(다국어는 비범위).
 - **로그 마스킹**: ERROR 로그에 원본 텍스트를 적지 않는다 — 매치된 키워드 목록만 적는다. 로그도 운영자에게 노출되는 채널이라는 가정.
 - **fallback 메시지 텍스트**: "응답 생성 중 문제가 발생했습니다. 다시 시도해 주세요." 로 고정. 변경 시 PRD 갱신 필요.
