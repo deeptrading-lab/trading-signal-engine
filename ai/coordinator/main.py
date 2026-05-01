@@ -89,6 +89,59 @@ def _resolve_self_user_id(app: Any, logger: logging.Logger) -> str | None:
         return None
 
 
+def _dispatch_message(
+    event: dict,
+    *,
+    say: Any,
+    logger: logging.Logger,
+    config: CoordinatorConfig,
+    self_user_id: str | None,
+    safe_say_fn: Any = None,
+) -> None:
+    """`message.im` 이벤트 라우팅 본체.
+
+    `handle_message_im` 클로저에서 추출한 모듈 함수. 통합 테스트가 mock `say`
+    하나로 시나리오(정상/자기/비-IM/비처리 subtype/비허용)를 검증할 수 있도록
+    독립 호출 가능하게 분리했다. `safe_say_fn` 은 테스트에서 응답 발사 가드를
+    가로채기 위한 옵션이며, 기본값은 모듈의 `safe_say`.
+    """
+    safe_say_callable = safe_say_fn if safe_say_fn is not None else safe_say
+
+    # AC-9: 봇 자기 메시지는 즉시 반환.
+    if is_self_message(event, self_user_id):
+        return
+
+    # MVP 는 DM(IM)만 처리. 그 외 채널 타입은 무시.
+    if event.get("channel_type") != "im":
+        return
+
+    # PRD slack-message-subtype-guard: 편집·삭제·시스템 메시지 등은 조용히 무시.
+    if not is_handleable_message_subtype(event):
+        logger.info(
+            "처리 대상이 아닌 메시지 이벤트를 무시했습니다 "
+            "(subtype=%s, sender=%s, type=%s)",
+            event.get("subtype"),
+            mask_user_id(extract_sender(event)),
+            event.get("type"),
+        )
+        return
+
+    sender = extract_sender(event)
+
+    # AC-5: 화이트리스트 외 발신자는 무시 + INFO 로그.
+    if not is_allowed_sender(sender, config.allowed_user_ids):
+        logger.info(
+            "허용되지 않은 발신자 메시지를 무시했습니다 (sender=%s, type=%s)",
+            mask_user_id(sender),
+            event.get("type"),
+        )
+        return
+
+    text = event.get("text") or ""
+    reply = route_command(text)
+    safe_say_callable(say, reply, logger, context="route_command")
+
+
 def build_app(config: CoordinatorConfig, logger: logging.Logger) -> Any:
     """
     slack-bolt App 을 구성한다. 의존성 분리를 위해 별도 함수로 분리해 두면
@@ -104,39 +157,13 @@ def build_app(config: CoordinatorConfig, logger: logging.Logger) -> Any:
 
     @app.event("message")
     def handle_message_im(event: dict, say: Any, logger: logging.Logger = logger) -> None:
-        # AC-9: 봇 자기 메시지는 즉시 반환.
-        if is_self_message(event, self_user_id):
-            return
-
-        # MVP 는 DM(IM)만 처리. 그 외 채널 타입은 무시.
-        if event.get("channel_type") != "im":
-            return
-
-        # PRD slack-message-subtype-guard: 편집·삭제·시스템 메시지 등은 조용히 무시.
-        if not is_handleable_message_subtype(event):
-            logger.info(
-                "처리 대상이 아닌 메시지 이벤트를 무시했습니다 "
-                "(subtype=%s, sender=%s, type=%s)",
-                event.get("subtype"),
-                mask_user_id(extract_sender(event)),
-                event.get("type"),
-            )
-            return
-
-        sender = extract_sender(event)
-
-        # AC-5: 화이트리스트 외 발신자는 무시 + INFO 로그.
-        if not is_allowed_sender(sender, config.allowed_user_ids):
-            logger.info(
-                "허용되지 않은 발신자 메시지를 무시했습니다 (sender=%s, type=%s)",
-                mask_user_id(sender),
-                event.get("type"),
-            )
-            return
-
-        text = event.get("text") or ""
-        reply = route_command(text)
-        safe_say(say, reply, logger, context="route_command")
+        _dispatch_message(
+            event,
+            say=say,
+            logger=logger,
+            config=config,
+            self_user_id=self_user_id,
+        )
 
     # `app_mention` 이벤트가 들어와도 무시(스코프 회수 전 안전장치).
     @app.event("app_mention")

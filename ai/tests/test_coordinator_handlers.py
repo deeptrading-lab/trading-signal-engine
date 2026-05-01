@@ -7,7 +7,7 @@ PRD: docs/prd/coordinator-compliance-module.md
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from ai.coordinator._compliance import assert_no_forbidden
 from ai.coordinator.handlers import (
