@@ -1,12 +1,13 @@
-# PRD: 개발 협업 Slack 봇 — Dev Relay (로컬 데몬)
+# PRD: 개발 협업 Slack 봇 — Dev Manager (로컬 데몬)
 
-- **slug**: `slack-dev-relay`
+- **slug**: `slack-dev-relay` (코드·브랜치·Issue 식별자는 기존 슬러그 유지 — 내부용이므로 변경 비용 회피)
 - **PM**: 이하영 (hayoung.lee2@musinsa.com, Slack `U0AE7A54NHL`)
-- **작성일**: 2026-05-01
+- **작성일**: 2026-05-01 (봇 표시명 변경: 2026-05-02)
 - **UI 포함 여부**: **No** (별도 웹/네이티브 UI 없음. Slack 메시지·Block Kit 버튼만 사용 — Block Kit은 Slack 워크스페이스 네이티브 UX이므로 본 저장소의 UX/UI 디자이너 합류 트리거에는 해당하지 않는다.)
-- **봇 표시명 (PM 결정)**: **`Hayoung Dev Relay`**
+- **봇 표시명 (PM 결정)**: **`Hayoung Dev Manager`**
   - App 이름·Display Name·App Home·Bot User Name 모두 동일.
   - 기존 `Hayoung AI Coordinator` 와는 **별도 Slack App**, **별도 토큰**, **별도 데몬 프로세스**로 분리한다.
+  - 내부 식별자(슬러그 `slack-dev-relay`, 디렉토리 `ai/dev_relay/`, 환경변수 `SLACK_DEV_RELAY_*`, audit 경로 `~/.local/state/dev_relay/`)는 사용자 노출 채널이 아니므로 그대로 유지한다.
 
 ---
 
@@ -22,7 +23,7 @@
 - **봇 표시명, App 이름, App 설명, App Home, 모든 사용자 노출 메시지 본문, Block Kit 버튼 라벨, 외부 문서·README 발췌, 커밋 메시지·PR 본문**에 도메인 키워드 평문 노출은 **절대 사용 금지**한다.
 - 정확한 정책 목록은 [`ai/coordinator/_compliance.py`](../../ai/coordinator/_compliance.py) 의 `FORBIDDEN_KEYWORDS` **단일 정의 지점**을 참조한다. 본 봇도 같은 모듈을 그대로 재사용한다 (별도 키워드 셋을 만들지 않는다 — 정책 단일화).
 - **코드 내부 식별자**(디렉토리 `ai/dev_relay/`, 모듈 변수명, 로그 키 등) 는 내부용이므로 저장소 슬러그·기존 모듈명을 유지해도 된다. 사용자에게 **출력되는** 문자열에만 제약이 적용된다.
-- 본 PRD 본문에서 봇을 통칭할 때는 **"Dev Relay 봇"** 또는 **"릴레이 봇"** 으로 부른다.
+- 본 PRD 본문에서 봇을 통칭할 때는 **"Dev Manager 봇"** 으로 부른다.
 
 ---
 
@@ -46,8 +47,8 @@
 
 사용자가 Slack 앱 콘솔에서 **새 App을 직접 생성**한다 (부록 A 참고). 본 PRD는 데몬 코드만 책임지며, Slack App 생성 자체는 사용자 수동 작업이다.
 
-- App 이름 / Display Name: **`Hayoung Dev Relay`** (소문자 변형 포함, 컴플라이언스 준수)
-- 표시 설명(App Description): "Personal workflow relay for hayoung. Bridges Slack DMs to a local automation agent." (도메인 키워드 미포함)
+- App 이름 / Display Name: **`Hayoung Dev Manager`** (소문자 변형 포함, 컴플라이언스 준수)
+- 표시 설명(App Description): "Personal workflow manager for hayoung. Bridges Slack DMs to a local automation agent." (도메인 키워드 미포함)
 - **Bot Token Scopes** (OAuth & Permissions):
   - 필수: `app_mentions:read`, `im:history`, `im:read`, `im:write`, `chat:write`, `chat:write.public`
   - 선택: `reactions:write` (작업 시작/완료 시 메시지에 이모지 리액션 표시 — UX 보강용, 미구현이어도 AC에는 영향 없음)
@@ -197,7 +198,7 @@ QA가 그대로 체크리스트로 사용한다. **재현 절차 + 기대 결과
 - **기대**: 표준 출력/로그에 Socket Mode 연결 성공을 의미하는 메시지(`connected` 또는 `socket mode established` 류)가 5초 이내 1회 이상 찍힌다. 토큰 값은 노출되지 않는다.
 
 ### AC-2. `status` 응답
-- **재현**: 본인(U0AE7A54NHL)이 `Hayoung Dev Relay` DM에 `status` 입력.
+- **재현**: 본인(U0AE7A54NHL)이 `Hayoung Dev Manager` DM에 `status` 입력.
 - **기대**: 5초 이내 같은 DM에 응답이 도착하며, 응답 본문에 다음이 포함된다:
   - 처리 중 작업 수
   - 대기(pending) 작업 수
@@ -303,7 +304,7 @@ QA가 그대로 체크리스트로 사용한다. **재현 절차 + 기대 결과
 
 ### 6.2 사전조건 — 사용자가 Slack 앱 콘솔에서 수동 설정 (개발 시작 전 완료 가정)
 
-- **신규 App 생성**: `Hayoung Dev Relay` (부록 A 단계별 가이드)
+- **신규 App 생성**: `Hayoung Dev Manager` (부록 A 단계별 가이드)
   - Socket Mode ON
   - App-Level Token (`xapp-...`), scope `connections:write`
   - Bot Token Scopes: §3.1
@@ -354,7 +355,7 @@ QA가 그대로 체크리스트로 사용한다. **재현 절차 + 기대 결과
 
 | 항목 | 결정 |
 |------|------|
-| 봇 표시명 / App 이름 | **`Hayoung Dev Relay`** |
+| 봇 표시명 / App 이름 | **`Hayoung Dev Manager`** (내부 슬러그·디렉토리·환경변수는 `slack-dev-relay`/`dev_relay`/`SLACK_DEV_RELAY_*` 그대로) |
 | 코드 위치 | `ai/dev_relay/` (코디네이터와 형제 디렉토리) |
 | 작업 큐 백엔드 | **SQLite** (단일 파일, `~/.local/state/dev_relay/queue.db`) |
 | 동시 실행 제한 | **1건** (MVP) — 두 번째 명령은 pending 으로 적재 |
@@ -372,7 +373,7 @@ QA가 그대로 체크리스트로 사용한다. **재현 절차 + 기대 결과
 > 사용자 노출 텍스트가 아니지만 본 부록도 도메인 키워드를 쓰지 않는다.
 
 A.1 https://api.slack.com/apps → **Create New App** → From scratch.
-- App Name: `Hayoung Dev Relay`
+- App Name: `Hayoung Dev Manager`
 - Workspace: 회사 Slack 워크스페이스 선택.
 
 A.2 좌측 **App Home** → Messages Tab ON, "Allow users to send Slash commands and messages from the messages tab" 체크.
@@ -393,7 +394,7 @@ A.5 좌측 **Event Subscriptions** → Enable Events ON → "Subscribe to bot ev
 A.6 좌측 **Interactivity & Shortcuts** → Interactivity ON. Request URL 비워둠 (Socket Mode 사용).
 
 A.7 좌측 **Basic Information** → 기본 설명/표시명 컴플라이언스 검토:
-- Short description: "Personal workflow relay for hayoung."
+- Short description: "Personal workflow manager for hayoung."
 - Long description: "Bridges Slack DMs to a local automation agent for personal productivity."
 - App icon: 중립 아이콘.
 
@@ -413,7 +414,7 @@ pip install -r ai/requirements.txt
 python -m ai.dev_relay.main
 ```
 
-연결 로그 확인 후 Slack 모바일/데스크톱에서 `Hayoung Dev Relay` DM에 `status` 입력 → 5초 내 응답 확인.
+연결 로그 확인 후 Slack 모바일/데스크톱에서 `Hayoung Dev Manager` DM에 `status` 입력 → 5초 내 응답 확인.
 
 ---
 
