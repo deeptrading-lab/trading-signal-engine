@@ -118,3 +118,44 @@ class TestLoadConfig:
     def test_default_user_id_includes_pm(self):
         """PRD §3.1: 기본 화이트리스트는 PM user id 포함."""
         assert "U0AE7A54NHL" in DEFAULT_ALLOWED_USER_IDS
+
+
+class TestPlaceholderGuard:
+    """`.env.example` placeholder 값이 흘러들어왔을 때 fail-fast 회귀 차단."""
+
+    def test_bot_token_placeholder_raises(self):
+        with pytest.raises(ConfigError) as exc_info:
+            load_config(
+                {
+                    "SLACK_BOT_TOKEN": "xoxb-여기에붙여넣기",
+                    "SLACK_APP_TOKEN": VALID_APP,
+                }
+            )
+        message = str(exc_info.value)
+        assert "SLACK_BOT_TOKEN" in message
+        assert "placeholder" in message
+        assert ".env" in message
+
+    def test_app_token_placeholder_raises(self):
+        with pytest.raises(ConfigError) as exc_info:
+            load_config(
+                {
+                    "SLACK_BOT_TOKEN": VALID_BOT,
+                    "SLACK_APP_TOKEN": "xapp-여기에붙여넣기",
+                }
+            )
+        message = str(exc_info.value)
+        assert "SLACK_APP_TOKEN" in message
+        assert "placeholder" in message
+        assert ".env" in message
+
+    def test_real_tokens_pass_placeholder_guard(self):
+        """placeholder 가 아닌 정상 토큰은 가드를 통과한다."""
+        cfg = load_config(
+            {
+                "SLACK_BOT_TOKEN": VALID_BOT,
+                "SLACK_APP_TOKEN": VALID_APP,
+            }
+        )
+        assert cfg.bot_token == VALID_BOT
+        assert cfg.app_token == VALID_APP

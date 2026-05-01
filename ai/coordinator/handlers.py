@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import platform
 import socket
-import sys
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Callable

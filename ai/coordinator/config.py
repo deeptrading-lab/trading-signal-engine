@@ -17,6 +17,16 @@ DEFAULT_ALLOWED_USER_IDS: tuple[str, ...] = ("U0AE7A54NHL",)
 _BOT_TOKEN_PREFIX = "xoxb-"
 _APP_TOKEN_PREFIX = "xapp-"
 
+# `.env.example` 의 placeholder 표현이 그대로 흘러들어오면 prefix 검사를 통과해버려
+# fail-fast 가 무력화된다. SSoT 는 본 frozenset 한 곳으로 두고, `.env.example` 표현이
+# 바뀌더라도 코드 가드가 우선해 차단한다.
+_PLACEHOLDER_TOKENS: frozenset[str] = frozenset(
+    {
+        "xoxb-여기에붙여넣기",
+        "xapp-여기에붙여넣기",
+    }
+)
+
 
 class ConfigError(ValueError):
     """환경변수 누락·형식 오류. 메시지에 토큰 값을 포함하지 않는다."""
@@ -87,6 +97,11 @@ def load_config(env: dict[str, str] | None = None) -> CoordinatorConfig:
             "환경변수 SLACK_BOT_TOKEN 의 prefix 가 올바르지 않습니다 "
             f"(기대: '{_BOT_TOKEN_PREFIX}')."
         )
+    if bot_token in _PLACEHOLDER_TOKENS:
+        raise ConfigError(
+            "환경변수 SLACK_BOT_TOKEN 가 placeholder 값입니다. "
+            ".env 를 실제 토큰으로 채우세요."
+        )
 
     if not app_token:
         raise ConfigError(
@@ -96,6 +111,11 @@ def load_config(env: dict[str, str] | None = None) -> CoordinatorConfig:
         raise ConfigError(
             "환경변수 SLACK_APP_TOKEN 의 prefix 가 올바르지 않습니다 "
             f"(기대: '{_APP_TOKEN_PREFIX}')."
+        )
+    if app_token in _PLACEHOLDER_TOKENS:
+        raise ConfigError(
+            "환경변수 SLACK_APP_TOKEN 가 placeholder 값입니다. "
+            ".env 를 실제 토큰으로 채우세요."
         )
 
     return CoordinatorConfig(
