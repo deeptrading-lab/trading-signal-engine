@@ -195,6 +195,28 @@ gh label create prd-requested prd-ready design-ready impl-wip impl-ready \
 
 ---
 
+## 이슈 우선순위 (P0 / P1 / P2)
+
+모든 GitHub Issue는 정확히 **하나의 priority 라벨**을 갖는다. 생성 시점에 영향(impact) × 노력(effort)을 평가해 부여한다.
+
+| 라벨 | 정의 | 예시 |
+|---|---|---|
+| `priority:P0` | 긴급 — 실제 버그 / 사용자 경험 직접 영향 / 보안 / 데이터 정합성 | 메시지 편집·삭제 시 봇이 오답 발사, 토큰 평문 누출, 인증 우회 |
+| `priority:P1` | 중요 — ROI 좋은 개선 / 다른 작업의 prerequisite / 자주 쓰는 UX 개선 | dotenv 자동 로딩, 다음 PRD가 의존하는 모듈화 |
+| `priority:P2` | 여유 — 코드 품질 / 기술 부채 / chore / 회귀 방지용 테스트 보강 | 미사용 import 정리, dispatcher 단위 테스트, 마이너 가드 보강 |
+
+### 신규 이슈 생성 절차 (PM / DevOps / Reviewer 공통)
+
+1. **기존 open 이슈 스캐닝**: `gh issue list --state open --limit 100` 또는 `gh search issues` 로 동일·유사 이슈 중복을 확인. 중복이면 새로 만들지 말고 기존 이슈에 코멘트로 컨텍스트 추가.
+2. **priority 평가**: 위 표 기준으로 P0/P1/P2 결정. 애매하면 더 높은 쪽으로 (P1 vs P2 → P1).
+3. **라벨 부여**: 이슈 본문 작성 시 `--label priority:P0` (또는 P1/P2) + 도메인 라벨(`enhancement`/`tech-debt`/`chore`/`bug` 등) 동시 부여.
+4. **출처 명시**: 본문에 "출처: PR #N 리뷰 / QA §x.x / 가이드 §y" 형태로 기록 — 스캐닝 시 컨텍스트 회복이 빠르다.
+
+### 우선순위 변경
+- 평가 후 잘못 매겼다고 판단되면 PR 코멘트나 이슈 코멘트로 근거를 남기고 라벨 교체. 침묵 변경 금지.
+
+---
+
 ## 두 사람 작업 규칙 (락·동시성)
 
 - **작업 선점 = Issue assignee 설정**. 같은 slug를 두 명이 동시에 잡지 않는다.
