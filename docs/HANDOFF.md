@@ -72,3 +72,46 @@
 - PR #27 (HANDOFF 시스템) `qa-passed` → Reviewer → 머지 → 동작 검증
 - HANDOFF 자동화 동작 확인 후 1~2주 운영, 본문 발췌 길이/노이즈 점검
 - 본 backfill 항목은 PR #27 머지 후 첫 자동 entry 가 추가되기 전까지 임시 기준점 역할
+
+### 2026-05-01 — HANDOFF 인수인계 로그 + qa-passed 시점 자동 append 워크플로우 (#27)
+
+- **slug**: `handoff-system` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/27
+- **요약**: HANDOFF 인수인계 로그 + qa-passed 시점 자동 append 워크플로우
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## Summary
+  > 
+  > 두 사람이 비동기로 작업할 때 **직전에 무엇이 머지되었고 무엇이 남았는지**를 빠르게 따라잡기 위한 시스템.
+  > 
+  > - [docs/HANDOFF.md](docs/HANDOFF.md): 작업 시작 전 최근 5개 항목을 읽는 단일 진입점
+  > - [.github/workflows/handoff-append.yml](.github/workflows/handoff-append.yml): `qa-passed` 라벨이 붙은 시점에 **해당 PR의 feature 브랜치 자체**에 HANDOFF 항목을 자동 commit
+  > - [AGENTS.md](AGENTS.md): 작업 시작 전 HANDOFF 확인 + 운영 섹션 + Reviewer 게이트에 HANDOFF 점검 항목 추가
+  > 
+  > ## 동작 방식
+  > 
+  > 1. PR이 QA를 통과하여 `qa-passed` 라벨이 붙음
+  > 2. 워크플로우가 그 PR의 head 브랜치를 checkout
+  > 3. PR 번호·제목·작성자·slug·본문 발췌·"다음 작업 후보"를 `docs/HANDOFF.md` 에 append
+  > 4. **같은 feature 브랜치에 commit + push** (별도 chore PR 만들지 않음)
+  > 5. Reviewer가 코드 + HANDOFF 항목을 한 번에 최종 점검 후 머지
+  > 
+  > PR 본문에 `## 다음 작업` 섹션이 있으면 자동으로 추출되어 HANDOFF에 후보로 기재됩니다 (강제 아님).
+  > 
+  > 멱등성: 같은 PR에 라벨이 재부착되어도 `(#PR번호)` 가 이미 있으면 skip.
+  > 
+  > ## Test plan
+  > 
+  > - [ ] 이 PR을 QA 통과 처리하여 `qa-passed` 라벨을 부여 → 워크플로우가 동일 브랜치(`feature/handoff-system`)에 HANDOFF 항목을 commit하는지 확인
+  > - [ ] 자동 추가된 HANDOFF 항목이 사실관계대로인지 검토
+  > - [ ] 라벨을 떼었다가 재부착해도 중복 entry가 생기지 않는지 확인 (멱등성)
+  > - [ ] PR 본문의 `## 다음 작업` 섹션이 HANDOFF "다음 작업 후보" 로 잘 추출되는지 확인
+  > 
+  > ## 다음 작업
+  > 
+  > - 머지 후 다음 PR부터는 본문에 `## 다음 작업` 섹션을 의식적으로 작성하여 HANDOFF 추적 품질 확인
+- **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):
+  - 머지 후 다음 PR부터는 본문에 `## 다음 작업` 섹션을 의식적으로 작성하여 HANDOFF 추적 품질 확인
+  - 1~2주 운영 후 본문 발췌 길이(현재 30줄)가 너무 길면 축소 검토
+  - main 브랜치 보호 규칙이 있다면 `github-actions[bot]` 의 feature 브랜치 push 가 막히지 않는지 첫 트리거 시 확인
+  🤖 Generated with [Claude Code](https://claude.com/claude-code)
