@@ -350,3 +350,129 @@ $ git diff main...pr-12 -- ai/coordinator/auth.py ai/coordinator/main.py \
 - **실패 항목**: 0건.
 
 → 라벨 권장: **`qa-auto-passed`** (수동 검증 완료 시 PR 코멘트 + `qa-passed` 로 승격).
+
+---
+
+## 7. 추가 검증 (커밋 `c358f28`)
+
+> 작성일: 2026-05-01 (2차 검증)
+> 트리거: 사용자 1차 수동 검증에서 편집·삭제 시 봇 응답은 정상이나 stdout 로그가 `sender=<unknown>` 으로 찍히는 문제 발견 → 발신자 추출 fallback 보강 커밋.
+
+### 7.1 변경 요약
+
+| 파일 | 변경 |
+|---|---|
+| `ai/coordinator/auth.py` | 순수 함수 `extract_sender(event)` 추가 (top-level → `message.user` → `previous_message.user` 우선순위) |
+| `ai/coordinator/main.py` | 2곳에 적용 — (1) subtype 무시 로그의 `mask_user_id(...)` 인자, (2) 화이트리스트 체크용 `sender = ...` 할당 |
+| `ai/tests/test_coordinator_auth.py` | `TestExtractSender` 8 케이스 추가 |
+
+### 7.2 자동 회귀
+
+```
+$ python -m pytest ai/tests/ -q
+138 passed in 0.27s
+
+$ python -m pytest ai/tests/test_coordinator_auth.py::TestExtractSender -v
+============================== 8 passed in 0.18s ===============================
+```
+
+기존 130개 + 신규 8개 = **138개 전부 PASS**. 회귀 0건.
+
+| # | 케이스 | 입력 | 기대 | 결과 |
+|---|---|---|---|---|
+| 1 | top-level user | `{"user": "U_AAA"}` | `"U_AAA"` | PASS |
+| 2 | `message_changed` nested | `event["message"]["user"]` | nested user 반환 | PASS |
+| 3 | `message_deleted` previous | `event["previous_message"]["user"]` | previous user 반환 | PASS |
+| 4 | 우선순위 (top > nested > prev) | 셋 다 존재, top 다른 값 | top 값 우선 | PASS |
+| 5 | 어디에도 없음 | `{"type": "message"}` | `None` | PASS |
+| 6 | 빈 top-level user fallback | `{"user": "", "message": {"user": "U_FB"}}` | nested로 fallback | PASS |
+| 7 | 비-Mapping 입력 | `None` / `"str"` | `None` (방어) | PASS |
+| 8 | 비-Mapping nested 무시 | `{"message": "broken", "previous_message": {...}}` | previous로 폴스루 | PASS |
+
+### 7.3 코드 정합성 점검
+
+#### A. `extract_sender` 순수 함수성
+
+`ai/coordinator/auth.py:39-69`:
+- I/O 없음 (logger·network·fs 미참조).
+- 전역 상태 미변경.
+- 입력 mutate 없음 (`Mapping.get()` read-only).
+- 결정적 출력. 부수효과 없음.
+
+→ PRD 정신(가드 헬퍼는 순수 함수, 로깅은 호출부)과 일치. PASS.
+
+#### B. 우선순위 로직 정합성
+
+PRD AC-6 명세 ("마스킹된 sender id") + Slack 페이로드 스키마:
+- `message_changed`: 봇이 응답해야 할 발신자는 **편집한 사용자** = `message.user` ✓
+- `message_deleted`: 보존되는 정보는 **삭제 전 작성자** = `previous_message.user` ✓
+- 우선순위 (top → nested → previous): 일반 메시지에 top-level user 가 있으면 즉시 반환 → 빠른 경로 보존, 부수효과 없음.
+- 빈 문자열은 falsy → 다음 폴백으로 폴스루 (T-6 검증). `None`/`""` 모두 처리.
+
+→ PASS.
+
+#### C. `main.py` 호출부 적용 (2곳)
+
+```
+$ grep -n "extract_sender" ai/coordinator/main.py
+23:    extract_sender,
+84:                mask_user_id(extract_sender(event)),
+89:        sender = extract_sender(event)
+```
+
+```
+$ grep -nE "event\.get\(['\"]user['\"]\)" ai/coordinator/main.py
+(매치 없음)
+```
+
+| 적용 지점 | 라인 | 변경 전 | 변경 후 |
+|---|---|---|---|
+| subtype 무시 로그의 sender | 84 | `mask_user_id(event.get("user"))` | `mask_user_id(extract_sender(event))` |
+| 화이트리스트 체크 sender | 89 | `sender = event.get("user")` | `sender = extract_sender(event)` |
+
+→ PRD 명시 2곳 모두 정확히 적용됨. 잔여 raw `event.get("user")` 호출 없음. PASS.
+
+또한 `is_self_message`(`auth.py:14-37`) 의 `event.get("user")` 는 의도된 분리 — 자기 메시지 판정은 `bot_id` 우선이고 user 필드는 봇 자신 user id 와의 일치 여부 판정용이므로 fallback 적용 대상 아님 (subtype=bot_message 는 `bot_id` 또는 별도 분기에서 이미 차단). 변경 불필요.
+
+#### D. 외부 노출 텍스트 컴플라이언스
+
+```
+$ git diff 0430e28..c358f28 -- ai/coordinator/auth.py ai/coordinator/main.py \
+    ai/tests/test_coordinator_auth.py \
+    | grep -niE 'signal|trade|trading|desk|quant|finance|market|ticker|pnl'
+MATCHES: 0
+```
+
+→ 추가 커밋 diff에 트레이딩 키워드 **0건**. PRD AC-8 충족 (Slack 봇 표시명/응답 노출 키워드 정책 준수).
+
+### 7.4 사용자 재검증 체크리스트 (수동)
+
+`docs/qa/slack-message-subtype-guard.md` §3 의 M-2·M-3 를 데몬 재기동 후 다시 수행하면서 **로그 내 sender 값** 만 추가로 확인하면 됩니다.
+
+- [ ] 데몬 종료 후 재기동: `python -m ai.coordinator.main`
+- [ ] **M-2 재확인 (편집)**: 본인 DM 메시지 편집 → 데몬 stdout 의 로그 라인이
+      `... INFO ai.coordinator: 처리 대상이 아닌 메시지 이벤트를 무시했습니다 (subtype=message_changed, sender=U0AE***, type=message)`
+      형태로 **본인 user id 가 마스킹되어** 보이는지. (`U0AE***` 등 — 끝 4자리 가림)
+- [ ] **M-3 재확인 (삭제)**: 본인 DM 메시지 삭제 → 동일 형식, `subtype=message_deleted`, `sender=U0AE***` 로 표시.
+- [ ] **회귀 음성 확인**: `sender=<unknown>` 문자열이 stdout 에 더 이상 출력되지 **않는지** (`grep -F '<unknown>' ` 등으로 확인 가능).
+- [ ] **AC-1 회귀 (정상 메시지)**: `ping` → `pong` 정상 응답이 그대로 동작하는지 (extract_sender 가 top-level 경로에서 즉시 반환되어 화이트리스트 체크 통과해야 함).
+
+### 7.5 에지 케이스 보강
+
+| 에지 | 처리 | 결과 |
+|---|---|---|
+| `message_changed` 페이로드의 `previous_message` 까지 user 누락 | top → nested → prev 순회 후 None | PASS (T-5) |
+| top-level `user` 가 빈 문자열 (Slack SDK 의 자료형 변형) | falsy 판정으로 nested 폴스루 | PASS (T-6) |
+| `message` 키 값이 dict 아닌 변형 페이로드 | `isinstance(..., Mapping)` 가드로 안전, previous 로 폴스루 | PASS (T-8) |
+| 비-Mapping `event` (slack-bolt 변종) | 즉시 None 반환 | PASS (T-7) |
+| 봇 자기 메시지의 `extract_sender` 호출 | `is_self_message` 가 먼저 차단해 도달 불가 (`main.py:71-72`) | PASS (호출 순서) |
+
+### 7.6 종합 (2차)
+
+- 자동 회귀: **138 PASS / 0 FAIL**.
+- 신규 함수 정합성: PASS (순수 함수, 우선순위 PRD/Slack 스키마 부합).
+- `main.py` 호출부 정합성: 2곳 모두 적용, 잔여 raw 호출 0.
+- 외부 노출 텍스트 컴플라이언스: 키워드 0건.
+- 실패 항목: **0건**.
+
+→ 자동 검증 범위 내 회귀/정합성 모두 PASS. 라벨 유지 권장 (`qa-auto-passed`). 사용자 §7.4 재확인 후 모두 PASS 시 PR 코멘트와 함께 `qa-passed` 로 승격.
