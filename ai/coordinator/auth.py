@@ -36,6 +36,59 @@ def is_self_message(event: Mapping[str, Any], self_bot_user_id: str | None) -> b
     return False
 
 
+def extract_sender(event: Mapping[str, Any]) -> str | None:
+    """
+    이벤트 페이로드에서 발신자 user id 를 추출 (subtype 별 위치 차이 보정).
+
+    Slack 은 subtype 에 따라 user 필드가 다른 위치에 들어간다:
+    - 일반 메시지: `event["user"]`
+    - `message_changed`: 편집된 본문은 `event["message"]["user"]`
+    - `message_deleted`: 삭제 전 본문은 `event["previous_message"]["user"]`
+
+    우선순위(top-level → message → previous_message)대로 첫 비어있지 않은 값을
+    반환하며, 어디에도 없으면 None.
+    """
+    if not isinstance(event, Mapping):
+        return None
+    sender = event.get("user")
+    if sender:
+        return sender
+    nested = event.get("message")
+    if isinstance(nested, Mapping):
+        sender = nested.get("user")
+        if sender:
+            return sender
+    previous = event.get("previous_message")
+    if isinstance(previous, Mapping):
+        sender = previous.get("user")
+        if sender:
+            return sender
+    return None
+
+
+def is_handleable_message_subtype(event: Mapping[str, Any]) -> bool:
+    """
+    명령 라우팅 대상 이벤트인지 판정 (PRD: slack-message-subtype-guard §3.1).
+
+    whitelist 정책 — 일반 사용자 텍스트 메시지만 True 로 판정한다:
+    - `subtype` 키가 이벤트에 없는 경우
+    - `subtype` 값이 None 인 경우
+    - `subtype` 값이 빈 문자열인 경우
+
+    그 외 모든 subtype(`message_changed`, `message_deleted`, `thread_broadcast`,
+    `file_share`, `bot_message`, `channel_join`, `channel_leave`, 그리고 알려지지
+    않은 신규 subtype 등)은 False 를 반환해 보수적으로 무시한다.
+
+    부수효과 없음 (로깅은 호출부에서 수행).
+    """
+    if not isinstance(event, Mapping):
+        return False
+    subtype = event.get("subtype")
+    if subtype is None or subtype == "":
+        return True
+    return False
+
+
 def is_allowed_sender(
     user_id: str | None,
     allowed_user_ids: Iterable[str],

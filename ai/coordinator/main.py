@@ -19,7 +19,13 @@ import signal
 import sys
 from typing import Any
 
-from ai.coordinator.auth import is_allowed_sender, is_self_message, mask_user_id
+from ai.coordinator.auth import (
+    extract_sender,
+    is_allowed_sender,
+    is_handleable_message_subtype,
+    is_self_message,
+    mask_user_id,
+)
 from ai.coordinator.config import ConfigError, CoordinatorConfig, load_config
 from ai.coordinator.handlers import route_command
 
@@ -69,7 +75,18 @@ def build_app(config: CoordinatorConfig, logger: logging.Logger) -> Any:
         if event.get("channel_type") != "im":
             return
 
-        sender = event.get("user")
+        # PRD slack-message-subtype-guard: 편집·삭제·시스템 메시지 등은 조용히 무시.
+        if not is_handleable_message_subtype(event):
+            logger.info(
+                "처리 대상이 아닌 메시지 이벤트를 무시했습니다 "
+                "(subtype=%s, sender=%s, type=%s)",
+                event.get("subtype"),
+                mask_user_id(extract_sender(event)),
+                event.get("type"),
+            )
+            return
+
+        sender = extract_sender(event)
 
         # AC-5: 화이트리스트 외 발신자는 무시 + INFO 로그.
         if not is_allowed_sender(sender, config.allowed_user_ids):
