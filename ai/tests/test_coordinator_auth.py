@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ai.coordinator.auth import (
+    extract_sender,
     is_allowed_sender,
     is_handleable_message_subtype,
     is_self_message,
@@ -135,3 +136,50 @@ class TestMaskUserId:
 
     def test_empty_returns_unknown(self):
         assert mask_user_id("") == "<unknown>"
+
+
+class TestExtractSender:
+    """subtype 별 user 위치 차이 보정 — message_changed/message_deleted 등에서 실 발신자 추출."""
+
+    def test_top_level_user_returned(self):
+        assert extract_sender({"user": "U_AAA"}) == "U_AAA"
+
+    def test_message_changed_uses_nested_message_user(self):
+        event = {
+            "type": "message",
+            "subtype": "message_changed",
+            "message": {"user": "U_BBB", "text": "edited"},
+            "previous_message": {"user": "U_BBB", "text": "old"},
+        }
+        assert extract_sender(event) == "U_BBB"
+
+    def test_message_deleted_uses_previous_message_user(self):
+        event = {
+            "type": "message",
+            "subtype": "message_deleted",
+            "previous_message": {"user": "U_CCC", "text": "deleted"},
+        }
+        assert extract_sender(event) == "U_CCC"
+
+    def test_top_level_user_takes_precedence_over_nested(self):
+        event = {
+            "user": "U_TOP",
+            "message": {"user": "U_NESTED"},
+            "previous_message": {"user": "U_PREV"},
+        }
+        assert extract_sender(event) == "U_TOP"
+
+    def test_no_user_anywhere_returns_none(self):
+        assert extract_sender({"type": "message"}) is None
+
+    def test_empty_user_falls_through_to_nested(self):
+        event = {"user": "", "message": {"user": "U_FALLBACK"}}
+        assert extract_sender(event) == "U_FALLBACK"
+
+    def test_non_mapping_returns_none(self):
+        assert extract_sender(None) is None  # type: ignore[arg-type]
+        assert extract_sender("not a dict") is None  # type: ignore[arg-type]
+
+    def test_non_mapping_nested_message_ignored(self):
+        event = {"message": "broken", "previous_message": {"user": "U_PREV"}}
+        assert extract_sender(event) == "U_PREV"

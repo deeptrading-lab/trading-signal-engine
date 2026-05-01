@@ -36,6 +36,36 @@ def is_self_message(event: Mapping[str, Any], self_bot_user_id: str | None) -> b
     return False
 
 
+def extract_sender(event: Mapping[str, Any]) -> str | None:
+    """
+    이벤트 페이로드에서 발신자 user id 를 추출 (subtype 별 위치 차이 보정).
+
+    Slack 은 subtype 에 따라 user 필드가 다른 위치에 들어간다:
+    - 일반 메시지: `event["user"]`
+    - `message_changed`: 편집된 본문은 `event["message"]["user"]`
+    - `message_deleted`: 삭제 전 본문은 `event["previous_message"]["user"]`
+
+    우선순위(top-level → message → previous_message)대로 첫 비어있지 않은 값을
+    반환하며, 어디에도 없으면 None.
+    """
+    if not isinstance(event, Mapping):
+        return None
+    sender = event.get("user")
+    if sender:
+        return sender
+    nested = event.get("message")
+    if isinstance(nested, Mapping):
+        sender = nested.get("user")
+        if sender:
+            return sender
+    previous = event.get("previous_message")
+    if isinstance(previous, Mapping):
+        sender = previous.get("user")
+        if sender:
+            return sender
+    return None
+
+
 def is_handleable_message_subtype(event: Mapping[str, Any]) -> bool:
     """
     명령 라우팅 대상 이벤트인지 판정 (PRD: slack-message-subtype-guard §3.1).
