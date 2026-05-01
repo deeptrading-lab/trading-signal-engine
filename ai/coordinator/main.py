@@ -23,6 +23,7 @@ from typing import Any
 
 from dotenv import find_dotenv, load_dotenv
 
+from ai.coordinator._compliance import find_forbidden_keywords
 from ai.coordinator.auth import (
     extract_sender,
     is_allowed_sender,
@@ -34,6 +35,38 @@ from ai.coordinator.config import ConfigError, CoordinatorConfig, load_config
 from ai.coordinator.handlers import route_command
 
 _LOGGER_NAME = "ai.coordinator"
+
+# 응답 텍스트 검사 매치 시 사용자에게 보낼 fallback 메시지.
+# PRD: docs/prd/coordinator-compliance-module.md (옵션 A — 차단 + fallback 발사)
+# 변경 시 PRD 갱신 필요.
+FALLBACK_RESPONSE: str = "응답 생성 중 문제가 발생했습니다. 다시 시도해 주세요."
+
+
+def safe_say(
+    say: Any,
+    text: str | None,
+    logger: logging.Logger,
+    *,
+    context: str = "",
+) -> None:
+    """응답 발사 직전 도메인 키워드 검사를 거치는 가드 wrapper.
+
+    - 매치 없음 → 원본 텍스트 그대로 `say(text)`.
+    - 매치 있음 → 원본 차단 후 `say(FALLBACK_RESPONSE)`. ERROR 로그는 매치된
+      키워드 목록만 기록(원본은 로그에도 남기지 않는다).
+    - `text` 가 `None`/빈 문자열이면 검사를 통과시키고 그대로 발사한다 — 빈 응답
+      자체는 정책 위반이 아니며, 호출 측이 의도한 빈 응답을 가로채지 않는다.
+    """
+    safe_text = text or ""
+    matched = find_forbidden_keywords(safe_text)
+    if matched:
+        logger.error(
+            "compliance: blocked response",
+            extra={"context": context, "matched": matched},
+        )
+        say(FALLBACK_RESPONSE)
+        return
+    say(safe_text)
 
 
 def _setup_logging(level: str) -> logging.Logger:
@@ -103,7 +136,7 @@ def build_app(config: CoordinatorConfig, logger: logging.Logger) -> Any:
 
         text = event.get("text") or ""
         reply = route_command(text)
-        say(reply)
+        safe_say(say, reply, logger, context="route_command")
 
     # `app_mention` 이벤트가 들어와도 무시(스코프 회수 전 안전장치).
     @app.event("app_mention")

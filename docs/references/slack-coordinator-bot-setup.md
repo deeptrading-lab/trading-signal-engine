@@ -201,6 +201,7 @@ Slack에서 `Hayoung AI Coordinator` DM 채널 열고 입력:
 - [ ] 토큰을 README/스크린샷/채팅에 노출한 적 없다 (의심 시 **Revoke & Reinstall**)
 - [ ] `SLACK_ALLOWED_USER_IDS`에 본인 ID만 있다 (그 외에는 응답하지 않음)
 - [ ] 봇 응답·로그·문서 어디에도 트레이딩 도메인 키워드가 없다 (자동 검증: `ai/tests/test_coordinator_handlers.py::assert_no_forbidden_keywords`)
+- [ ] 응답 발사 시 도메인 키워드 자동 검사 적용 — `ai/coordinator/_compliance.py`
 - [ ] App icon/Description/Display Name이 회사 동료 시점에서 의심스럽지 않다
 
 ---
