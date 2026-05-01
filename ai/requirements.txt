@@ -5,5 +5,9 @@
 # 업그레이드 시 ai/llm/retry.py::RETRYABLE_EXCEPTIONS 동기화 필수.
 anthropic>=0.97.0
 
+# 코디네이터 인바운드 데몬(Socket Mode 클라이언트 포함).
+# PRD: docs/prd/slack-coordinator-inbound.md
+slack-bolt>=1.18
+
 # 개발·테스트 의존성 (pytest 는 테스트 실행 시 필요).
 pytest>=8.0
