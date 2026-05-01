@@ -59,7 +59,7 @@ jobs:
           # 종결: 다음 ## 헤딩 / 수평선(---) / Claude Code 푸터(🤖) / HTML 주석.
           NEXT=$(printf '%s\n' "${PR_BODY:-}" | awk '
             BEGIN { flag = 0; IGNORECASE = 1 }
-            /^##[[:space:]]*(다음 작업|Next( steps)?|Follow[- ]?up|후속 작업)/ { flag = 1; next }
+            /^##[[:space:]]*(다음 작업|Next( steps)?|Follow[- ]?up|후속( 작업)?)/ { flag = 1; next }
             /^##[[:space:]]/ { flag = 0 }
             /^---+[[:space:]]*$/ { flag = 0 }
             /^[[:space:]]*🤖/ { flag = 0 }
