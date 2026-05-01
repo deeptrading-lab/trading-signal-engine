@@ -9,5 +9,9 @@ anthropic>=0.97.0
 # PRD: docs/prd/slack-coordinator-inbound.md
 slack-bolt>=1.18
 
+# `.env` 자동 로딩 — 진입점에서 `load_dotenv(override=False)` 한 줄.
+# PRD: docs/prd/coordinator-dotenv-autoload.md
+python-dotenv>=1.0
+
 # 개발·테스트 의존성 (pytest 는 테스트 실행 시 필요).
 pytest>=8.0

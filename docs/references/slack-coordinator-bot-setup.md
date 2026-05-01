@@ -134,12 +134,15 @@ LOG_LEVEL=INFO
 >
 > **본인 user id 확인**: Slack 프로필 → 더보기(⋯) → **Copy member ID**. 또는 Claude Code 세션에서 `mcp__slack__users_search`로 조회.
 
-### 3-3. 환경변수 로딩 + 데몬 실행
+### 3-3. 데몬 실행
+
+프로젝트 루트의 `.env` 는 데몬 시작 시 **자동 로딩**되므로 별도의 `source` 단계가 필요 없습니다.
 
 ```bash
-set -a && source .env && set +a
 python -m ai.coordinator.main
 ```
+
+> **셸 export 우선순위**: 셸에 이미 동일 이름의 환경변수가 export 되어 있으면 그 값이 우선이고, `.env` 값은 덮어쓰지 않습니다(`load_dotenv(override=False)`). 임시로 다른 토큰을 쓰고 싶으면 `SLACK_BOT_TOKEN=xoxb-... python -m ai.coordinator.main` 처럼 한 줄에 묶어 실행하면 됩니다. 컨테이너/CI 같은 운영 환경에서도 셸 환경변수 주입이 그대로 동작합니다.
 
 연결 성공 시 다음과 같은 로그가 뜹니다:
 
@@ -183,7 +186,7 @@ Slack에서 `Hayoung AI Coordinator` DM 채널 열고 입력:
 |---|---|---|
 | 봇 DM 입력창에 "이 앱으로 메시지를 보내는 기능이 꺼져 있습니다" | App Home → Messages Tab 토글 OFF | §2-2 토글 ON + 답장 허용 체크 |
 | 봇 메시지가 알림으로만 뜨고 사이드바에 DM 채널 안 보임 | 사용자가 봇 DM을 한 번도 안 연 상태 | Slack에서 봇 검색 → 프로필 → **Message** 한 번 보내면 정상 채널로 표시 |
-| `[코디네이터] 시작 실패: 환경변수 SLACK_BOT_TOKEN 이 설정되지 않았습니다.` | 새 셸/창에서 `.env` 미로딩 | `set -a && source .env && set +a` 다시 실행 |
+| `[코디네이터] 시작 실패: 환경변수 SLACK_BOT_TOKEN 이 설정되지 않았습니다.` | 프로젝트 루트가 아닌 곳에서 실행했거나 `.env` 가 없음 | 프로젝트 루트(또는 그 하위)에서 실행 + `.env` 파일 존재 확인. `.env` 는 자동 로딩됨 |
 | `pip: command not found` | venv에 pip 스크립트 누락 | `python -m pip ...` 형태로 호출, 또는 `python -m ensurepip --upgrade` |
 | `not_authed` / `invalid_auth` | 토큰 오타·만료·Reinstall 후 토큰 갱신 미반영 | OAuth & Permissions 페이지에서 최신 `xoxb` 다시 복사 |
 | `missing_scope` | Bot Token Scopes 부족 | §2-3 표 확인 후 추가 → **Reinstall to Workspace** |
@@ -222,7 +225,7 @@ ai/coordinator/
 - 명령 → ai/ 파이프라인 또는 backend/ 모듈 호출 연동
 - 슬래시 커맨드, Block Kit 인터랙티브 컴포넌트
 - 클라우드 배포 (Cloud Run / Lambda 등 — Socket Mode 대신 HTTP webhook으로 전환)
-- `python-dotenv` 자동 로딩 (매번 `source .env` 불필요하게)
+- `.env` 자동 로딩 — 구현됨 (PRD: [`coordinator-dotenv-autoload`](../prd/coordinator-dotenv-autoload.md))
 - 메시지 subtype 가드 — 구현됨 (PRD: [`slack-message-subtype-guard`](../prd/slack-message-subtype-guard.md))
 
 ---
