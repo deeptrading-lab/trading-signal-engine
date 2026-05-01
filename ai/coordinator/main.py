@@ -92,15 +92,25 @@ def build_app(config: CoordinatorConfig, logger: logging.Logger) -> Any:
     return app
 
 
-def _install_signal_handlers(handler: Any, logger: logging.Logger) -> None:
-    """SIGINT/SIGTERM 에 graceful close 핸들러 등록 (AC-6)."""
+def _install_signal_handlers(logger: logging.Logger) -> None:
+    """SIGINT/SIGTERM 수신 시 KeyboardInterrupt 로 변환해 메인 스레드 wait 를 깨운다 (AC-6).
+
+    slack-bolt SocketModeHandler.start() 은 메인 스레드에서 블록하며 KeyboardInterrupt
+    를 받을 때 정상 종료한다. close()/sys.exit() 를 시그널 핸들러 안에서 직접 호출하면
+    내부 wait 가 깨어나지 않아 종료가 멈추는 사례가 있어 raise 방식으로 통일한다.
+    """
 
     def _shutdown(signum: int, _frame: Any) -> None:
         logger.info("종료 시그널 수신(%s) — 코디네이터를 정리 중입니다.", signum)
+        # close() 도중 추가 시그널이 들어와 재진입하면 lock 위에서 KeyboardInterrupt 가
+        # 다시 raise 되어 traceback 이 노출된다. 첫 신호 이후엔 기본 핸들러로 되돌려
+        # 다음 Ctrl+C 가 와도 표준 종료 흐름을 따르게 한다.
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
         try:
-            handler.close()
-        finally:
-            sys.exit(0)
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        except (ValueError, AttributeError):
+            pass
+        raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, _shutdown)
     try:
@@ -128,7 +138,7 @@ def run() -> int:
     from slack_bolt.adapter.socket_mode import SocketModeHandler
 
     handler = SocketModeHandler(app=app, app_token=config.app_token)
-    _install_signal_handlers(handler, logger)
+    _install_signal_handlers(logger)
 
     try:
         logger.info("Socket Mode 연결을 시도합니다.")
