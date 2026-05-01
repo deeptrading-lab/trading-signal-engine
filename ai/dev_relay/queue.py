@@ -1,5 +1,5 @@
 """
-SQLite 기반 작업 큐 (Dev Relay).
+SQLite 기반 작업 큐 (Dev Manager).
 
 PRD §3.4 / AC-11 / AC-14:
 - 백엔드: SQLite 단일 파일 (`${XDG_STATE_HOME:-~/.local/state}/dev_relay/queue.db`).

@@ -1,5 +1,5 @@
 """
-발신자 / 버튼 액션 화이트리스트 판정 (Dev Relay).
+발신자 / 버튼 액션 화이트리스트 판정 (Dev Manager).
 
 PRD AC-7 / §3.8: 화이트리스트 외 user_id 에서 오는 메시지·Block Kit 액션은
 모두 무시. 봇 자기 메시지(infinite loop 방지)도 본 모듈에서 차단한다 (AC-17).

@@ -1,5 +1,5 @@
 """
-Dev Relay 데몬 엔트리포인트.
+Dev Manager 데몬 엔트리포인트.
 
 PRD: docs/prd/slack-dev-relay.md
 
@@ -467,11 +467,11 @@ def run() -> int:
         config = load_config()
     except ConfigError as exc:
         # AC-9: 한 줄 메시지 + 비정상 exit. 토큰은 노출되지 않는다.
-        print(f"[Dev Relay] 시작 실패: {exc}", file=sys.stderr)
+        print(f"[Dev Manager] 시작 실패: {exc}", file=sys.stderr)
         return 2
 
     logger = _setup_logging(config.log_level)
-    logger.info("Dev Relay 데몬을 시작합니다. %s", config.with_masked_repr())
+    logger.info("Dev Manager 데몬을 시작합니다. %s", config.with_masked_repr())
 
     queue = JobQueue()
     # PRD §3.4 — 재시작 복구.
@@ -506,7 +506,7 @@ def run() -> int:
             runner.shutdown(wait=True, timeout=_SHUTDOWN_TIMEOUT_S)
         except Exception:  # noqa: BLE001
             pass
-        logger.info("Dev Relay 데몬을 정리했습니다.")
+        logger.info("Dev Manager 데몬을 정리했습니다.")
     return 0
 
 

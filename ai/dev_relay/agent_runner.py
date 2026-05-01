@@ -1,5 +1,5 @@
 """
-Claude Agent SDK 호출 래퍼 (Dev Relay).
+Claude Agent SDK 호출 래퍼 (Dev Manager).
 
 PRD §3.2 / §3.8 결정사항:
 - 호출 패턴: **동기(sync) 호출 + worker thread**. slack-bolt 이벤트 루프와 분리.

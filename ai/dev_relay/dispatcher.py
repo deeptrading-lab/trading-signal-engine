@@ -1,5 +1,5 @@
 """
-명령 파싱·라우팅 (Dev Relay).
+명령 파싱·라우팅 (Dev Manager).
 
 PRD §3.3: MVP 명령은 정확히 3개.
 - `status`
