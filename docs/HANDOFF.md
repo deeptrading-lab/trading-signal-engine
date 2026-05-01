@@ -38,3 +38,37 @@
 ## 로그
 
 <!-- 새 항목은 이 줄 아래에 자동/수동으로 append된다. 위쪽이 최신이 아니라 아래쪽이 최신이다. -->
+
+### 2026-05-02 — [BACKFILL] HANDOFF 도입 시점 누적 컨텍스트
+
+이 항목은 HANDOFF 자동화 도입 전의 누적 상태를 1회 정리한 것이다. 이후 항목은 PR 단위로 자동 생성된다.
+
+- **author**: @HY0118
+
+**최근 머지된 작업 (최신순)**
+
+- #26 — 코디네이터 봇 셋업 가이드 갱신 (owner 메타변수 + 후속 PR 결과 반영)
+- #23 — 디자인 가이드 산출물 DESIGN.md 포맷 표준화
+- #22 — references/rules 잔존 도메인 키워드 평문 정정
+- #20 — 코디네이터 코드 정리 (dispatcher 추출 + placeholder 가드 + 미사용 import 제거)
+- #19 — 코디네이터 PRD/QA 잔존 도메인 키워드 평문 정정
+- #18 — feature 브랜치 산출물 commit 규칙 추가
+- #16 — 코디네이터 docstring·가이드 잔존 노출 정정
+- #14 — 코디네이터 컴플라이언스 가드 모듈 분리 + 응답 발사 가드 도입
+- #13 — 코디네이터 진입점 `.env` 자동 로딩
+- #12 — Slack 메시지 subtype 가드 추가
+- #11 — 이슈 우선순위 정책 (P0/P1/P2) 추가
+- #3 — 코디네이터 인바운드 데몬 도입 (Socket Mode)
+
+**진행 중 (open)**
+
+- **PR #25** `feature/slack-dev-relay` — 개발 협업 Slack 봇 MVP 구현. 라벨 `impl-ready`, **QA 대기 중**. 다음 단계: QA → `qa-passed` → Reviewer → 머지.
+- **PR #27** `feature/handoff-system` — 본 HANDOFF 시스템. 라벨 미부여 (이 PR이 곧 자기 자신을 검증하게 됨).
+- **Issue #24** `[slack-dev-relay]` PRD-ready, P1 — PR #25 가 그 구현체.
+
+**TODO / 다음 작업 후보 (절대적 지시 아님, 후보)**
+
+- PR #25 QA 진행 → `qa-passed` 라벨 부여 (본 워크플로우의 첫 자가 트리거 케이스가 됨)
+- PR #27 (HANDOFF 시스템) `qa-passed` → Reviewer → 머지 → 동작 검증
+- HANDOFF 자동화 동작 확인 후 1~2주 운영, 본문 발췌 길이/노이즈 점검
+- 본 backfill 항목은 PR #27 머지 후 첫 자동 entry 가 추가되기 전까지 임시 기준점 역할
