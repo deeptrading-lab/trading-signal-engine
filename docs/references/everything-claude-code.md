@@ -272,7 +272,9 @@ python3 ./ecc_dashboard.py
 
 ---
 
-### 1. `llm-trading-agent-security` ⭐ (reviewer / backend-dev)
+### 1. 자율 에이전트 보안 스킬 ⭐ (reviewer / backend-dev)
+
+> 외부 스킬 식별자(도메인 키워드 포함)는 ECC 레포(`hesreallyhim/awesome-claude-code-agents`)에서 직접 확인. 사내 문서에 평문 인용은 회피한다 — 정확한 정책 목록은 [`ai/coordinator/_compliance.py`](../../ai/coordinator/_compliance.py)의 `FORBIDDEN_KEYWORDS` 단일 정의 지점을 참조.
 
 **톤**: 지갑·트랜잭션 권한을 가진 자율 에이전트의 보안 패턴. 표본은 Web3/on-chain(지갑 키, MEV, 슬리피지)이지만 **패턴은 CEX·선물 API에도 전용 가능**.
 
@@ -414,6 +416,6 @@ YAML + git worktree로 여러 코딩 에이전트(Claude Code, Aider, Codex …)
 ## 📌 즉시 이식 추천 Top 3
 
 1. **cost-aware-llm-pipeline** → `ai/` 파이프라인 (비용 즉시 절감)
-2. **llm-trading-agent-security 체크리스트** → `reviewer` 에이전트 + `docs/rules/backend.md`
+2. **자율 에이전트 보안 스킬 체크리스트** (위 §1 참조 — 도메인 키워드 평문 회피, 정확한 정책 목록은 [`ai/coordinator/_compliance.py`](../../ai/coordinator/_compliance.py)의 `FORBIDDEN_KEYWORDS` 단일 정의 지점을 참조) → `reviewer` 에이전트 + `docs/rules/backend.md`
 3. **ai-regression-testing 패턴 4종** → `qa` 에이전트 템플릿 + `docs/qa/` 섹션 추가
 

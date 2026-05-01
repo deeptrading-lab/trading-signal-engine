@@ -165,7 +165,7 @@ Caching channels collection...
 
 ### 사용 예시 (Claude Code 프롬프트)
 
-- "내 #signal-engine 채널 최근 메시지 10개 보여줘"
+- "내 #release-notes 채널 최근 메시지 10개 보여줘" (도메인 키워드 채널명 노출 금지 — 정확한 정책 목록은 [`ai/coordinator/_compliance.py`](../../ai/coordinator/_compliance.py)의 `FORBIDDEN_KEYWORDS` 단일 정의 지점을 참조)
 - "@hayoung 한테 DM으로 '배포 끝났습니다' 보내줘"
 - "alpha-cost-guard PR 머지됐다고 #release-notes 채널에 알려줘"
 
