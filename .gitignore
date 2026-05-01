@@ -6,7 +6,7 @@
 ._*
 
 # Custom folder icons
-Icon
+Icon
 
 # Volume root files
 .DocumentRevisions-V100
@@ -25,3 +25,6 @@ __pycache__/
 venv/
 .coverage
 htmlcov/
+
+# Local MCP server config (per-developer; tokens via env)
+.mcp.json
