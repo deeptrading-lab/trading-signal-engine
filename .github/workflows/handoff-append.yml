@@ -1,0 +1,112 @@
+name: handoff-append
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: handoff-append
+  cancel-in-progress: false
+
+jobs:
+  append:
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.ref != 'chore/handoff-*'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip if this PR is itself a handoff PR
+        id: guard
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          case "$HEAD_REF" in
+            chore/handoff-*) echo "skip=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "skip=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Checkout main
+        if: steps.guard.outputs.skip == 'false'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Append handoff entry
+        if: steps.guard.outputs.skip == 'false'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_MERGED_AT: ${{ github.event.pull_request.merged_at }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          DATE=$(date -u -d "$PR_MERGED_AT" +%Y-%m-%d 2>/dev/null || date -u +%Y-%m-%d)
+          SLUG="${PR_HEAD_REF#feature/}"
+          mkdir -p docs
+          if [ ! -f docs/HANDOFF.md ]; then
+            printf '# HANDOFF — 작업 인수인계 로그\n\n## 로그\n\n' > docs/HANDOFF.md
+          fi
+
+          # PR 본문에서 "## 다음 작업" 또는 "## Next" 또는 "## Follow-up" 섹션 추출
+          NEXT=$(printf '%s\n' "${PR_BODY:-}" | awk '
+            BEGIN { flag = 0 }
+            /^##[[:space:]]*(다음 작업|다음|Next( steps)?|Follow[- ]?up|후속)/i { flag = 1; next }
+            /^##[[:space:]]/ { flag = 0 }
+            flag { print }
+          ' | sed '/^[[:space:]]*$/d' | head -n 15)
+
+          {
+            printf '\n### %s — %s (#%s)\n\n' "$DATE" "$PR_TITLE" "$PR_NUMBER"
+            printf -- '- **slug**: `%s` · **author**: @%s\n' "$SLUG" "$PR_AUTHOR"
+            printf -- '- **PR**: %s\n' "$PR_URL"
+            printf -- '- **요약**: %s\n' "$PR_TITLE"
+            printf -- '- **현재 상태**: main 머지됨\n'
+            if [ -n "${PR_BODY:-}" ]; then
+              printf -- '- **PR 본문**:\n'
+              printf '%s\n' "$PR_BODY" | head -n 30 | sed 's/^/  > /'
+            fi
+            if [ -n "$NEXT" ]; then
+              printf -- '- **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):\n'
+              printf '%s\n' "$NEXT" | sed 's/^/  /'
+            else
+              printf -- '- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._\n'
+            fi
+          } >> docs/HANDOFF.md
+
+      - name: Create branch, commit, open PR, auto-merge
+        if: steps.guard.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet docs/HANDOFF.md; then
+            echo "no handoff changes — nothing to PR"
+            exit 0
+          fi
+          BRANCH="chore/handoff-${PR_NUMBER}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add docs/HANDOFF.md
+          git commit -m "docs(handoff): #${PR_NUMBER} 머지 자동 기록"
+          git push origin "$BRANCH"
+
+          PR_BODY_OUT=$(printf 'PR #%s (%s) 머지 후 자동 생성된 HANDOFF 기록입니다.\n\n- 원본 PR: #%s\n- 자동 생성: handoff-append.yml\n' "$PR_NUMBER" "$PR_TITLE" "$PR_NUMBER")
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "docs(handoff): #${PR_NUMBER} 머지 자동 기록" \
+            --body "$PR_BODY_OUT"
+
+          # auto-merge: 보호 규칙·체크가 있다면 통과 후 자동 머지, 없으면 즉시 머지
+          gh pr merge "$BRANCH" --merge --delete-branch --auto || \
+            gh pr merge "$BRANCH" --merge --delete-branch

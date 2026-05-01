@@ -3,6 +3,8 @@
 이 문서는 **사람과 AI 에이전트**가 이 저장소에서 일할 때 공통으로 따르는 **역할·순서·산출물**을 정의합니다.  
 제품·아키텍처 개요는 [README.md](./README.md)를 참고하세요.
 
+> ⚡ **모든 작업 시작 전 [docs/HANDOFF.md](./docs/HANDOFF.md)의 최근 5개 항목을 먼저 읽는다.** 직전에 무엇이 머지되었고 어떤 후속 작업이 남아 있는지 확인하기 위함이다. 사람이든 AI 에이전트든 이 단계를 건너뛰지 않는다.
+
 ---
 
 ## 구조: 문서와 Cursor 자산
@@ -10,6 +12,7 @@
 | 위치 | 역할 |
 |------|------|
 | **이 파일 (`AGENTS.md`)** | 프로세스·PRD·커밋·배포 기준의 **단일 본문**. GitHub·리뷰·온보딩에서 먼저 읽습니다. |
+| **`docs/HANDOFF.md`** | 작업 인수인계 로그. 작업 시작 전 최근 항목을 읽고, PR이 머지되면 GitHub Actions가 자동 append합니다. |
 | **`docs/agents/*.md`** | 다른 IDE/CLI에서도 활용 가능한 **역할별 공용 문서(원본)**. |
 | **`docs/rules/*.md`** | 다른 IDE/CLI에서도 활용 가능한 **규칙 공용 문서(원본)**. |
 | **`skills/**/SKILL.md`** | 다른 IDE/CLI에서도 활용 가능한 **스택별 공용 스킬(원본)**. |
@@ -229,6 +232,18 @@ gh label create prd-requested prd-ready design-ready impl-wip impl-ready \
 - **PRD 수정은 PM만**. 구현 중 모호함이 나오면 QA/개발자는 PR·Issue 코멘트로 질문 → PM이 PRD를 갱신 → 라벨 되돌림.
 - **리뷰어 독립성**: PR 작성자와 다른 사람(또는 별도 cmux 패널/워크트리의 Reviewer 에이전트)이 리뷰. 본인 PR 자가-승인 금지.
 - **slug 산출물은 feature 브랜치에**: `docs/prd/<slug>.md`, `docs/qa/<slug>.md`, `docs/design/<slug>.md` 등 특정 slug에 귀속되는 산출물은 그 slug의 `feature/<slug>` 브랜치에 commit한다. main에 직접 commit·push 금지. 메인 Claude가 sub-agent 산출물(QA 리포트 등)을 push할 때는 `git branch --show-current` 로 현재 브랜치를 먼저 확인하고, 잘못 main에 들어간 commit이 있으면 즉시 cherry-pick → reset 으로 정정한다.
+
+---
+
+## 작업 인수인계 (HANDOFF)
+
+두 사람이 비동기로 작업하기 때문에 **누가 직전에 무엇을 머지했고 무엇이 남았는지**를 빠르게 따라잡는 장치가 필요하다. [docs/HANDOFF.md](./docs/HANDOFF.md) 가 그 역할을 한다.
+
+- **시작 전**: 사람이든 AI 에이전트든 새 작업을 잡기 전 `docs/HANDOFF.md` 의 **최근 5개 항목**을 먼저 읽는다. 본인이 다시 돌아왔을 때도 동일하게 확인.
+- **자동 append**: PR이 main에 머지되면 [.github/workflows/handoff-append.yml](./.github/workflows/handoff-append.yml) 가 `chore/handoff-<PR번호>` 브랜치를 만들어 HANDOFF 항목을 commit하고, PR을 열어 자동 머지한다 (main 직접 push 금지 룰 준수).
+- **다음 작업 후보 자동 추출**: PR 본문에 `## 다음 작업` (또는 `## Next steps`, `## Follow-up`, `## 후속`) 섹션을 넣으면 그 내용이 HANDOFF에 자동 채워진다. **후보일 뿐 절대적 지시가 아니다.** 다음 작업자(사람·AI 모두)는 참고만 하고 우선순위·문맥에 따라 자유롭게 결정한다.
+- **수동 append (선택)**: PR로 묶이지 않는 메모(WIP 중단, 디버깅 발견, 후속 TODO)는 세션 끝에 직접 추가해도 된다. `### YYYY-MM-DD — [WIP] 제목` 형태로 적는다.
+- **순서**: 위가 오래된 항목, 아래가 최신. 최근 항목은 파일 하단에서 읽는다.
 
 ---
 
