@@ -209,22 +209,22 @@ contains_full_user_id= False     (전체 user id 노출 없음)
 - [ ] 로그·표준 출력에 `xoxb-...` / `xapp-...` 토큰 값이 **노출되지 않음**. `CoordinatorConfig(bot_token=xoxb-***, app_token=xapp-***, ...)` 형식으로 마스킹.
 
 ### AC-2. `ping` → `pong`
-- [ ] 본인이 `Hayoung AI Coordinator` DM에 `ping` 입력.
-- [ ] 5초 이내 같은 DM에 `pong` 텍스트 회신 도착.
+- [x] 본인이 `Hayoung AI Coordinator` DM에 `ping` 입력. _(사용자 보고 PASS, 스크린샷 첨부 — 2026-05-01)_
+- [x] 5초 이내 같은 DM에 `pong` 텍스트 회신 도착. _(사용자 보고 PASS — 2026-05-01)_
 
 ### AC-3. `status` 응답
-- [ ] 본인 DM에 `status` 입력.
-- [ ] 5초 이내 응답이 도착하며 본문에 다음 4종 모두 포함:
+- [x] 본인 DM에 `status` 입력. _(사용자 보고 PASS — 2026-05-01)_
+- [x] 5초 이내 응답이 도착하며 본문에 다음 4종 모두 포함: _(사용자 보고 PASS — 2026-05-01)_
   - 가동시간 `Nd HH:MM:SS` 형식 (예: `0d 00:01:23`)
   - 호스트명 (로컬 머신 hostname)
   - 현재 시각 KST ISO-8601 (`2026-05-01T19:32:58+09:00` 형식, `+09:00` offset)
   - Python 버전 (`3.11.x`)
-- [ ] 응답 첫 줄에 `코디네이터 상태` (트레이딩 도메인 키워드 미포함).
+- [x] 응답 첫 줄에 `코디네이터 상태` (트레이딩 도메인 키워드 미포함). _(사용자 보고 PASS — 2026-05-01)_
 
 ### AC-4. 알 수 없는 명령·정규화
-- [ ] `  ping ` (공백) 입력 → `pong` 회신.
-- [ ] `PING` (대문자) 입력 → `pong` 회신.
-- [ ] `asdf` / `help` / `안녕` 입력 → 사용 가능한 명령 안내 응답(`ping`/`status` 두 항목 포함).
+- [ ] `  ping ` (공백) 입력 → `pong` 회신. _(사용자 보고에서 명시되지 않음 — 자동 단위 테스트 PASS, 사용자 보고는 정확히 `ping` 입력으로만 확인)_
+- [ ] `PING` (대문자) 입력 → `pong` 회신. _(동일 — 단위 테스트 PASS)_
+- [x] `asdf` / `help` / `안녕` 입력 → 사용 가능한 명령 안내 응답(`ping`/`status` 두 항목 포함). _(사용자 보고: `asdf` PASS — 2026-05-01)_
 
 ### AC-5. 화이트리스트 외 발신자
 - [ ] (가능하면) 다른 동료가 같은 봇 DM에서 `ping` 전송.
@@ -233,9 +233,9 @@ contains_full_user_id= False     (전체 user id 노출 없음)
 - [ ] 데몬 로그에 `허용되지 않은 발신자 메시지를 무시했습니다 (sender=U***, type=message)` INFO 라인 1회 기록 (전체 user id 노출 없음, 금지 키워드 없음).
 
 ### AC-6. graceful shutdown
-- [ ] 데몬 실행 터미널에서 `Ctrl+C` 입력.
-- [ ] 로그에 `종료 시그널 수신(2) — 코디네이터를 정리 중입니다.` + `코디네이터를 정리했습니다.` 출력.
-- [ ] **스택 트레이스 없이** 프로세스가 정상 종료 (exit code 0). 데몬이 hang 되지 않음.
+- [x] 데몬 실행 터미널에서 `Ctrl+C` 입력. _(사용자 보고: 1번에 정상 종료 PASS — 2026-05-01)_
+- [x] 로그에 `종료 시그널 수신(2) — 코디네이터를 정리 중입니다.` + `코디네이터를 정리했습니다.` 출력. _(사용자 보고 PASS — 2026-05-01)_
+- [x] **스택 트레이스 없이** 프로세스가 정상 종료 (exit code 0). 데몬이 hang 되지 않음. _(사용자 보고: hang 없음 PASS — 2026-05-01, 커밋 `741d87a` fix 적용 후 검증)_
 
 ---
 
@@ -286,4 +286,152 @@ grep -nE "^\.env" .gitignore
 python -c "from ai.coordinator import main; ...  # AC-7 4 케이스 직접 호출"
 python -c "from ai.coordinator.handlers import ...  # AC-8 grep"
 python -c "from ai.coordinator.auth import ...     # AC-9 4 시나리오"
+```
+
+---
+
+## 추가 검증 (커밋 `741d87a`, `1a1607d`)
+
+> 작성일: 2026-05-01 (2차)
+> 대상 커밋:
+> - `741d87a` fix(coordinator): Ctrl+C 시 종료가 멈추는 문제 수정
+> - `1a1607d` docs(coordinator): 셋업 가이드 + `.env.example` + QA 리포트 추가
+> 실행 환경: 동일 (Python 3.11.15 / pytest 9.0.3 / Darwin 25.4.0)
+
+### A. 회귀 테스트 (PASS)
+
+```
+$ python -m pytest ai/tests/ -v
+============================= 122 passed in 0.24s ==============================
+```
+
+- `ai/tests/test_coordinator_*.py` 53개 + 비-코디네이터 회귀 69개 = **122/122 PASS**.
+- 시그널 핸들러 시그니처 변경(`_install_signal_handlers(handler, logger)` → `_install_signal_handlers(logger)`)이 다른 모듈에 영향 없음 — 호출부가 `main.run()` 한 곳뿐이며 동일 커밋에서 같이 갱신됨.
+
+### B. AC-6 시그널 핸들러 코드 리뷰 (PASS)
+
+`ai/coordinator/main.py:95-120` (커밋 `741d87a` 적용 후) 확인:
+
+```python
+def _install_signal_handlers(logger: logging.Logger) -> None:
+    def _shutdown(signum: int, _frame: Any) -> None:
+        logger.info("종료 시그널 수신(%s) — 코디네이터를 정리 중입니다.", signum)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        try:
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        except (ValueError, AttributeError):
+            pass
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, _shutdown)
+    try:
+        signal.signal(signal.SIGTERM, _shutdown)
+    except (ValueError, AttributeError):
+        pass
+```
+
+체크 항목:
+- [x] `KeyboardInterrupt`를 raise하여 `SocketModeHandler.start()`의 메인 스레드 wait를 깨우는 패턴 적용.
+- [x] **첫 신호 직후** `SIGINT`/`SIGTERM`을 `signal.SIG_DFL`로 되돌려 close() 도중 재진입(두 번째 Ctrl+C) 시 traceback 노출 방지.
+- [x] Windows 호환 가드(`SIGTERM` `signal()` 호출에 대한 `(ValueError, AttributeError)` 트랩) 유지.
+- [x] `run()` finally 블록의 `handler.close()` + 정리 로그가 그대로 살아 있어 graceful 정리 흐름 유지(`main.py:151-156`).
+- [x] handler 인자가 제거되며 호출부 (`main.py:141`)도 동시 갱신 — dangling 참조 없음.
+- [x] 사용자 수동 검증(2026-05-01): `status`, `asdf`, **Ctrl+C 1번에 정상 종료** 보고 → fix가 의도대로 동작함을 e2e 확인.
+
+판정: **PASS**.
+
+### C. 외부 노출 텍스트 컴플라이언스 재확인 (PASS)
+
+#### C.1 추가 커밋 diff 전체에 대한 키워드 grep
+
+```
+$ git show 741d87a 1a1607d | grep -iE '\b(signal|trade|trading|desk|quant|finance|market|ticker|pnl)\b'
+```
+
+매치된 8라인 모두 분류:
+
+| 라인 | 분류 | 판정 |
+|------|------|------|
+| `signal.signal(signal.SIGINT, signal.SIG_DFL)` 외 2건 (`main.py`) | Python 표준 라이브러리 식별자 (PRD AC-8 검사 대상 외) | OK |
+| `> 대상 PR: https://github.com/deeptrading-lab/trading-signal-engine/pull/3` (QA 리포트) | GitHub URL — 사용자 노출 텍스트 아님(QA 내부 문서 메타) | OK |
+| `**금지 키워드**: signal, trade, trading, desk, ...` (셋업 가이드 §0, QA 리포트) | **금지어 목록을 명시하는 정책 메타** — 봇 응답·로그·App 표시명 경로 아님 | OK |
+| `grep -inE "(signal|trade|trading|...)"` (커맨드 예시) | 검사 명령 자체. 사용자 노출 아님 | OK |
+
+#### C.2 신규 파일 (`.env.example`, `slack-coordinator-bot-setup.md`)에 대한 직접 grep
+
+```
+$ grep -inE '\b(signal|trade|trading|desk|quant|finance|market|ticker|pnl)\b' \
+    .env.example docs/references/slack-coordinator-bot-setup.md
+docs/references/slack-coordinator-bot-setup.md:24:**금지 키워드**: `signal`, `trade`, `trading`, `desk`, ...
+```
+
+- `.env.example`: 0건.
+- `slack-coordinator-bot-setup.md`: 1건, 모두 §0 "외부 노출 텍스트 네이밍 제약" 절에서 **금지어 목록 자체를 명시하는 메타 라인**. 봇 표시명·응답 메시지·로그 경로에 흐르지 않으며, 가이드 본문은 `Hayoung AI Coordinator`/`coordinator-socket`/`코디네이터` 등 중립어만 사용.
+
+#### C.3 사용자 노출 경로 (App 표시명/응답/로그) 재확인
+
+- 가이드 §2-1이 권고하는 App Name: `Hayoung AI Coordinator` — 금지어 미포함.
+- 가이드 §2-5의 App-Level Token 이름: `coordinator-socket` — 금지어 미포함.
+- 응답 텍스트: `pong` / `코디네이터 상태 ...` / 명령 안내 — 1차 검증(§2.3)에서 0건 확인. 본 추가 커밋은 응답 텍스트 변경 없음.
+
+판정: **PASS** (사용자 노출 경로 0건).
+
+### D. `.env.example` 검증 (PASS)
+
+`.env.example` 본문 확인:
+
+```
+SLACK_BOT_TOKEN=xoxb-여기에붙여넣기
+SLACK_APP_TOKEN=xapp-여기에붙여넣기
+SLACK_ALLOWED_USER_IDS=U0AE7A54NHL
+LOG_LEVEL=INFO
+```
+
+체크:
+- [x] 토큰 자리값이 placeholder(`xoxb-여기에붙여넣기` / `xapp-여기에붙여넣기`) — 실 토큰 아님.
+- [x] `SLACK_ALLOWED_USER_IDS=U0AE7A54NHL`은 사용자 본인 Slack user id로, **시크릿 아님**(공개 식별자 — 가이드 §3-2가 사용자 본인 ID를 .env에 채우라고 명시).
+- [x] `.gitignore` 규칙: `.env` + `.env.*`는 추적 제외, `!.env.example` 예외로 `.env.example`만 추적됨 (`.gitignore:33-35`). `git ls-files .env.example`이 추적 상태로 잡힘(커밋 `1a1607d` 포함).
+- [x] 토큰 prefix 검증 grep으로 `.env.example`에 실제 토큰(`xoxb-` 또는 `xapp-` 뒤 영숫자) 매치 없음 — 모두 한글 placeholder.
+
+판정: **PASS**.
+
+### E. 가이드 문서 명령 sanity check (PASS)
+
+`docs/references/slack-coordinator-bot-setup.md`의 핵심 명령들을 코드/구성과 대조:
+
+| 가이드 명령 | 검증 대상 | 결과 |
+|-------------|-----------|------|
+| `source .venv/bin/activate` | 프로젝트 루트에 `.venv/`가 표준 위치 (`.gitignore:24`로 ignore됨) | OK — 표준 패턴 |
+| `python -m pip install -r ai/requirements.txt` | `ai/requirements.txt`가 실제 존재하고 `slack-bolt>=1.18` 등 의존성 명시 | OK |
+| `cp .env.example .env` | `.env.example`가 추적 상태로 존재, `.env`가 `.gitignore`에 등록 | OK |
+| `set -a && source .env && set +a` | `.env`의 KEY=VALUE 형식이 export 호환 (실제 본문이 단순 `KEY=VALUE`) | OK |
+| `python -m ai.coordinator.main` | `ai/coordinator/main.py:160-161` — `if __name__ == "__main__": sys.exit(run())` 진입점 존재 | OK |
+| 시작 로그 `코디네이터를 시작합니다. CoordinatorConfig(bot_token=xoxb-***, app_token=xapp-***, ...)` | `main.py:133` 실제 로그 + `config.py`의 `with_masked_repr()`가 마스킹 형태 보장 | OK |
+| 종료 로그 `종료 시그널 수신(2) — 코디네이터를 정리 중입니다.` / `키보드 인터럽트로 종료합니다.` / `코디네이터를 정리했습니다.` | `main.py:104, 147, 156` 실제 로그 문구와 100% 일치 | OK |
+| 트러블슈팅 표의 `Ctrl+C 후 종료 안 됨 (옛 버그) → 본 PR에서 fix 완료` | 커밋 `741d87a` fix와 정합 | OK |
+| §6 "코드 구조" 표의 모듈 4종(`config`/`auth`/`handlers`/`main`) | 실제 파일 구조와 일치 | OK |
+
+판정: **PASS** (가이드 명령·로그 예시가 실제 코드 동작과 일치).
+
+### F. 추가 검증 종합
+
+| 항목 | 결과 |
+|------|------|
+| 회귀 122/122 | PASS |
+| AC-6 시그널 fix 코드 리뷰 | PASS |
+| 외부 노출 텍스트 키워드 (사용자 노출 경로) | PASS (0건) |
+| `.env.example` 토큰 placeholder/추적 규칙 | PASS |
+| 가이드 명령·로그 예시 정확성 | PASS |
+| 사용자 수동 검증 (`ping`/`status`/`asdf`/Ctrl+C) | PASS (체크리스트 §3 갱신) |
+
+**추가 검증 실패 0건. 1차 자동 검증 + 사용자 수동 검증 모두 PASS → PR #3 라벨 `qa-passed`로 승격 권장.**
+
+### G. 추가로 실행한 명령
+
+```
+git show --stat 741d87a 1a1607d
+git show 741d87a -- ai/coordinator/main.py
+python -m pytest ai/tests/ -v
+git show 1a1607d 741d87a | grep -iE '\b(signal|trade|trading|desk|quant|finance|market|ticker|pnl)\b'
+grep -inE '\b(signal|trade|trading|desk|quant|finance|market|ticker|pnl)\b' .env.example docs/references/slack-coordinator-bot-setup.md
 ```
