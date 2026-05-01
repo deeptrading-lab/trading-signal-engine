@@ -2,11 +2,13 @@
 코디네이터 데몬 엔트리포인트.
 
 PRD: docs/prd/slack-coordinator-inbound.md
+PRD: docs/prd/coordinator-dotenv-autoload.md  ―  `.env` 자동 로딩
 
 실행:
     python -m ai.coordinator.main
 
 동작:
+- 진입 시 `.env` 자동 로딩(셸 export 우선, override=False).
 - 환경변수 검증(fail-fast) → Socket Mode 클라이언트 시작.
 - `message.im` 이벤트만 처리. 화이트리스트 외 발신자·봇 자기 메시지는 무시.
 - SIGINT/SIGTERM 수신 시 graceful shutdown.
@@ -18,6 +20,8 @@ import logging
 import signal
 import sys
 from typing import Any
+
+from dotenv import find_dotenv, load_dotenv
 
 from ai.coordinator.auth import (
     extract_sender,
@@ -137,8 +141,26 @@ def _install_signal_handlers(logger: logging.Logger) -> None:
         pass
 
 
+def _autoload_dotenv() -> None:
+    """프로젝트 루트의 `.env` 를 자동 로딩한다.
+
+    PRD: docs/prd/coordinator-dotenv-autoload.md
+
+    - `find_dotenv()` 로 cwd → 상위 디렉토리를 탐색한다.
+    - `override=False` 로 **셸 export 가 항상 우선**(운영 환경 안전).
+    - `.env` 부재 시 조용히 무시(다음 단계의 `ConfigError` fail-fast 가 자연스럽게 작동).
+    - 본 라이브러리 import 는 진입점(`main.py`)에만 두고 `config.py` 는 순수 환경변수
+      검증 책임만 유지한다(단위 테스트가 dotenv 의존성 없이 동작).
+    """
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path, override=False)
+
+
 def run() -> int:
     """데몬 메인 루프. 종료 코드(0=정상)를 반환한다."""
+    _autoload_dotenv()
+
     try:
         config = load_config()
     except ConfigError as exc:
