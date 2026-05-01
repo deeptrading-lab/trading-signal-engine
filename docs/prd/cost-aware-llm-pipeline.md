@@ -161,7 +161,7 @@ QA가 그대로 테스트로 변환할 수 있는 검증 가능한 문장들.
 - `AGENTS.md` §"멀티 에이전트 역할" — Backend Dev(ai/ Python) 담당 범위 근거.
 - 외부 원본: ECC 저장소 `skills/cost-aware-llm-pipeline/SKILL.md` (MIT).
 - Anthropic 공식 문서: Prompt caching(`cache_control: ephemeral`), Messages API usage 필드.
-- 관련 후속 PRD 후보: `llm-trading-agent-security`(보안 가드), `eval-harness`(품질 회귀), `ai-regression-testing`(회귀 테스트 템플릿) — 본 PRD와 같은 ECC 레퍼런스 §1·2·4 참조.
+- 관련 후속 PRD 후보: LLM 에이전트 보안 가드(보안), `eval-harness`(품질 회귀), `ai-regression-testing`(회귀 테스트 템플릿) — 본 PRD와 같은 ECC 레퍼런스 §1·2·4 참조.
 
 ---
 

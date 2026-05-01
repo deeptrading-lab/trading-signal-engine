@@ -36,7 +36,7 @@ Slack은 일반 사용자 메시지뿐 아니라 다양한 **subtype** 이벤트
 사용자가 DM에서 자기 메시지를 **편집·삭제하는 것은 일상적인 동작**이다. 현재 구현에서는 이 동작이 매번 `사용 가능한 명령: ping, status` fallback 응답을 유발해, **봇과의 1:1 DM 채널이 노이즈로 가득 찬다**. 이는 사용자 경험을 직접 망가뜨리며, 동료 가시성 있는 회사 Slack 워크스페이스(무신사/29CM)에서 봇 DM이 비정상적으로 보이는 부수효과도 있다.
 
 ### 1.4 외부 노출 텍스트 제약 (재확인)
-- 봇 응답·로그·문서·커밋·PR 본문에서 트레이딩 도메인 키워드 금지: `signal`, `trade`, `trading`, `desk`, `quant`, `finance`, `market`, `ticker`, `pnl`.
+- 봇 응답·로그·문서·커밋·PR 본문에서 도메인 키워드 노출 금지 — 정확한 정책 목록은 [`ai/coordinator/_compliance.py`](../../ai/coordinator/_compliance.py)의 `FORBIDDEN_KEYWORDS` 단일 정의 지점을 참조.
 - 본 PRD에서 봇은 "코디네이터" 로 통칭한다.
 - 자세한 원칙은 `docs/prd/slack-coordinator-inbound.md` §3.3 / AC-8 참고.
 
@@ -175,8 +175,7 @@ QA가 그대로 체크리스트로 사용한다. **재현 절차 + 기대 결과
 
 ### AC-8. 외부 노출 텍스트 컴플라이언스
 - **재현**: 본 PRD 구현으로 추가/변경된 모든 사용자 노출 문자열(없음 — 응답 메시지는 추가되지 않음), 로그 메시지, 신규 코드 주석, 문서를 검사.
-- **기대**: 다음 키워드가 단 한 곳도 등장하지 않는다(대소문자 무시):
-  `signal`, `trade`, `trading`, `desk`, `quant`, `finance`, `market`, `ticker`, `pnl`.
+- **기대**: 도메인 키워드가 단 한 곳도 등장하지 않는다(대소문자 무시) — 정확한 정책 목록은 [`ai/coordinator/_compliance.py`](../../ai/coordinator/_compliance.py)의 `FORBIDDEN_KEYWORDS` 단일 정의 지점을 참조.
 - **참고**: 코드 내부 식별자(`ai.coordinator`, 모듈 변수명 등)는 검사 대상이 아니다.
 
 ---

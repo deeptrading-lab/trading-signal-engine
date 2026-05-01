@@ -67,7 +67,7 @@ TestDotenvAbsentFailsFast::test_load_config_raises_when_environment_empty  PASSE
 | **AC-R2** | 자동 | **PASS** | 신규 dotenv 테스트 **7개** (요구 최소 3개 초과). AC-A1/A2/O1/O2/F1/F2 모두 커버 |
 | **AC-D1** | 자동(diff) | **PASS** | `slack-coordinator-bot-setup.md` §3-3 — 제목 "환경변수 로딩 + 데몬 실행" → "데몬 실행", `set -a && source .env && set +a` 라인 제거, "**자동 로딩**되므로 별도의 `source` 단계가 필요 없습니다" 명시 |
 | **AC-D2** | 자동(diff) | **PASS** | 같은 §3-3 인용 블록 — "**셸 export 우선순위**: 셸에 이미 동일 이름의 환경변수가 export 되어 있으면 그 값이 우선 ... 컨테이너/CI 같은 운영 환경에서도 셸 환경변수 주입이 그대로 동작" 명시 |
-| **AC-D3** | 자동(grep) | **PASS** | `git diff main...pr-13 -- docs/...slack-coordinator-bot-setup.md` 의 추가 라인에서 `signal`/`trade`/`desk`/`order`/`position`/`portfolio` 키워드 grep 결과 0건. PR 전체 변경 파일 통합 grep 도 0건 |
+| **AC-D3** | 자동(grep) | **PASS** | `git diff main...pr-13 -- docs/...slack-coordinator-bot-setup.md` 의 추가 라인에서 도메인 키워드(정확한 정책 목록은 [`ai/coordinator/_compliance.py`](../../ai/coordinator/_compliance.py)의 `FORBIDDEN_KEYWORDS` 단일 정의 지점을 참조) grep 결과 0건. PR 전체 변경 파일 통합 grep 도 0건 |
 | **AC-Dep1** | 자동(파일 확인) | **PASS** | `ai/requirements.txt` 14행: `python-dotenv>=1.0` (PRD §3 의존성 §6 가정 준수) |
 | **AC-Dep2** | 자동(설치 확인) | **PASS** | `pip show python-dotenv` → `Version: 1.2.2` (1.x 메이저 안). PR 본문에도 설치 성공 기재 |
 
@@ -104,7 +104,7 @@ $ python -m pytest ai/tests/ -q
 ```
 $ git diff main...pr-13 -- ai/coordinator/main.py ai/tests/test_coordinator_main_dotenv.py \
     docs/references/slack-coordinator-bot-setup.md docs/prd/coordinator-dotenv-autoload.md \
-    | grep "^+" | grep -v "^+++" | grep -iE "\b(signal|trade|desk|order|position|portfolio)\b"
+    | grep "^+" | grep -v "^+++" | grep -iE "<도메인 키워드 alternation 정규식 — 자세한 정의는 SSoT 모듈 참조>"
 NO_TRADING_KEYWORDS_ADDED
 ```
 
