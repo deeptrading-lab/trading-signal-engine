@@ -1,0 +1,109 @@
+name: handoff-on-qa-passed
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: handoff-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  append:
+    if: github.event.label.name == 'qa-passed' && github.event.pull_request.state == 'open'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip if HANDOFF entry for this PR already exists
+        id: check
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -f docs/HANDOFF.md ] && grep -q "(#${PR_NUMBER})" docs/HANDOFF.md; then
+            echo "entry already exists for PR #${PR_NUMBER}, skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Append handoff entry
+        if: steps.check.outputs.skip == 'false'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          DATE=$(date -u +%Y-%m-%d)
+          SLUG="${PR_HEAD_REF#feature/}"
+          mkdir -p docs
+          if [ ! -f docs/HANDOFF.md ]; then
+            printf '# HANDOFF — 작업 인수인계 로그\n\n## 로그\n\n' > docs/HANDOFF.md
+          fi
+
+          # PR 본문에서 "## 다음 작업" / "## Next steps" / "## Follow-up" / "## 후속 작업" 섹션 추출.
+          # gawk IGNORECASE 사용 (GitHub-hosted ubuntu runner 의 awk 는 gawk).
+          # 종결: 다음 ## 헤딩 / 수평선(---) / Claude Code 푸터(🤖) / HTML 주석.
+          NEXT=$(printf '%s\n' "${PR_BODY:-}" | awk '
+            BEGIN { flag = 0; IGNORECASE = 1 }
+            /^##[[:space:]]*(다음 작업|Next( steps)?|Follow[- ]?up|후속( 작업)?)/ { flag = 1; next }
+            /^##[[:space:]]/ { flag = 0 }
+            /^---+[[:space:]]*$/ { flag = 0 }
+            /^[[:space:]]*🤖/ { flag = 0 }
+            /^[[:space:]]*<!--/ { flag = 0 }
+            flag { print }
+          ' | sed '/^[[:space:]]*$/d' | head -n 15)
+
+          {
+            printf '\n### %s — %s (#%s)\n\n' "$DATE" "$PR_TITLE" "$PR_NUMBER"
+            printf -- '- **slug**: `%s` · **author**: @%s\n' "$SLUG" "$PR_AUTHOR"
+            printf -- '- **PR**: %s\n' "$PR_URL"
+            printf -- '- **요약**: %s\n' "$PR_TITLE"
+            printf -- '- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)\n'
+            if [ -n "${PR_BODY:-}" ]; then
+              printf -- '- **PR 본문 발췌**:\n'
+              printf '%s\n' "$PR_BODY" | head -n 30 | sed 's/^/  > /'
+            fi
+            if [ -n "$NEXT" ]; then
+              printf -- '- **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):\n'
+              printf '%s\n' "$NEXT" | sed 's/^/  /'
+            else
+              printf -- '- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._\n'
+            fi
+          } >> docs/HANDOFF.md
+
+      - name: Commit and push to PR branch
+        if: steps.check.outputs.skip == 'false'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/HANDOFF.md
+          if git diff --staged --quiet; then
+            echo "no changes to commit"
+            exit 0
+          fi
+          git commit -m "docs(handoff): #${PR_NUMBER} QA 통과 시점 자동 기록 [skip ci]"
+          for i in 1 2 3; do
+            git pull --rebase origin "$PR_HEAD_REF" && git push origin "HEAD:$PR_HEAD_REF" && exit 0
+            echo "push attempt $i failed, retrying..."
+            sleep 3
+          done
+          echo "failed to push after 3 attempts"
+          exit 1
