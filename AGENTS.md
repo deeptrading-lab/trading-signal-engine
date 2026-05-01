@@ -198,6 +198,7 @@ gh label create prd-requested prd-ready design-ready impl-wip impl-ready \
 ## 두 사람 작업 규칙 (락·동시성)
 
 - **작업 선점 = Issue assignee 설정**. 같은 slug를 두 명이 동시에 잡지 않는다.
+- **PR assignee = 작업 의뢰자**. PR 생성 시 `gh pr create --assignee @me` 로 현재 `gh` 인증 사용자를 자동 지정한다. 두 명이 같은 저장소에서 일할 때 누가 책임지는 PR인지 한눈에 보이도록 한다.
 - **브랜치는 슬러그 하나당 하나**: `feature/<slug>`. 두 역할(예: FE + BE)이 같은 slug면 같은 브랜치에서 작업하거나 `feature/<slug>-fe`, `feature/<slug>-be`로 분리.
 - **PRD 수정은 PM만**. 구현 중 모호함이 나오면 QA/개발자는 PR·Issue 코멘트로 질문 → PM이 PRD를 갱신 → 라벨 되돌림.
 - **리뷰어 독립성**: PR 작성자와 다른 사람(또는 별도 cmux 패널/워크트리의 Reviewer 에이전트)이 리뷰. 본인 PR 자가-승인 금지.
