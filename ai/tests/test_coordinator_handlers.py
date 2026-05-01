@@ -1,10 +1,15 @@
-"""코디네이터 명령 라우팅·응답 텍스트 테스트 (AC-2, AC-3, AC-4, AC-8)."""
+"""코디네이터 명령 라우팅·응답 텍스트 테스트 (AC-2, AC-3, AC-4, AC-8).
+
+컴플라이언스 키워드 검사는 `ai.coordinator._compliance` 의 단일 정의를 사용한다.
+PRD: docs/prd/coordinator-compliance-module.md
+"""
 
 from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
 
+from ai.coordinator._compliance import assert_no_forbidden
 from ai.coordinator.handlers import (
     KST,
     normalize_command,
@@ -13,29 +18,6 @@ from ai.coordinator.handlers import (
     render_status,
     route_command,
 )
-
-
-# AC-8: 외부 노출 텍스트에 등장 금지 키워드.
-FORBIDDEN_KEYWORDS = (
-    "signal",
-    "trade",
-    "trading",
-    "desk",
-    "quant",
-    "finance",
-    "market",
-    "ticker",
-    "pnl",
-)
-
-
-def assert_no_forbidden_keywords(text: str) -> None:
-    """AC-8 컴플라이언스 헬퍼."""
-    lower = text.lower()
-    for keyword in FORBIDDEN_KEYWORDS:
-        assert keyword not in lower, (
-            f"외부 노출 응답에 금지 키워드 '{keyword}' 가 포함됨: {text!r}"
-        )
 
 
 class TestNormalizeCommand:
@@ -64,7 +46,7 @@ class TestRenderPing:
         assert render_ping() == "pong"
 
     def test_no_forbidden_keywords(self):
-        assert_no_forbidden_keywords(render_ping())
+        assert_no_forbidden(render_ping(), context="render_ping")
 
 
 class TestRenderStatus:
@@ -123,7 +105,7 @@ class TestRenderStatus:
             python_version_provider=lambda: "3.11.7",
             process_start_monotonic=0.0,
         )
-        assert_no_forbidden_keywords(text)
+        assert_no_forbidden(text, context="render_status")
 
     def test_iso_8601_format(self):
         text = render_status(
@@ -146,7 +128,7 @@ class TestRenderFallback:
         assert "status" in text
 
     def test_no_forbidden_keywords(self):
-        assert_no_forbidden_keywords(render_fallback())
+        assert_no_forbidden(render_fallback(), context="render_fallback")
 
 
 class TestRouteCommand:
@@ -183,4 +165,4 @@ class TestRouteCommand:
 
     def test_all_routed_outputs_have_no_forbidden_keywords(self):
         for inp in ["ping", "status", "asdf", "help", "  PING  ", "", None]:
-            assert_no_forbidden_keywords(route_command(inp))
+            assert_no_forbidden(route_command(inp), context=f"route_command({inp!r})")
