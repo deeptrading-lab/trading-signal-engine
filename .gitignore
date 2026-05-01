@@ -28,3 +28,8 @@ htmlcov/
 
 # Local MCP server config (per-developer; tokens via env)
 .mcp.json
+
+# Local environment files (per-developer; tokens·secrets)
+.env
+.env.*
+!.env.example
