@@ -224,6 +224,7 @@ gh label create prd-requested prd-ready design-ready impl-wip impl-ready \
 - **브랜치는 슬러그 하나당 하나**: `feature/<slug>`. 두 역할(예: FE + BE)이 같은 slug면 같은 브랜치에서 작업하거나 `feature/<slug>-fe`, `feature/<slug>-be`로 분리.
 - **PRD 수정은 PM만**. 구현 중 모호함이 나오면 QA/개발자는 PR·Issue 코멘트로 질문 → PM이 PRD를 갱신 → 라벨 되돌림.
 - **리뷰어 독립성**: PR 작성자와 다른 사람(또는 별도 cmux 패널/워크트리의 Reviewer 에이전트)이 리뷰. 본인 PR 자가-승인 금지.
+- **slug 산출물은 feature 브랜치에**: `docs/prd/<slug>.md`, `docs/qa/<slug>.md`, `docs/design/<slug>.md` 등 특정 slug에 귀속되는 산출물은 그 slug의 `feature/<slug>` 브랜치에 commit한다. main에 직접 commit·push 금지. 메인 Claude가 sub-agent 산출물(QA 리포트 등)을 push할 때는 `git branch --show-current` 로 현재 브랜치를 먼저 확인하고, 잘못 main에 들어간 commit이 있으면 즉시 cherry-pick → reset 으로 정정한다.
 
 ---
 
