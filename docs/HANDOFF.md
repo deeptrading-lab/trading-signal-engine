@@ -3,8 +3,9 @@
 > 새 작업을 시작할 때 **이 파일의 최근 5개 항목**을 먼저 읽고 컨텍스트를 잡는다.
 > 본인이 다시 돌아왔을 때도 동일하게 확인한다 (어디까지 했는지 잊었을 때).
 >
-> - **자동 append**: PR이 main에 머지되면 [.github/workflows/handoff-append.yml](.github/workflows/handoff-append.yml) 가 `chore/handoff-<PR>` 브랜치를 만들고 PR을 열어 자동 머지한다 (main 직접 push 안 함).
+> - **자동 append (QA 통과 시점)**: PR에 `qa-passed` 라벨이 붙으면 [.github/workflows/handoff-append.yml](.github/workflows/handoff-append.yml) 가 **그 PR의 feature 브랜치 자체에** HANDOFF 항목을 commit한다. 별도 PR을 만들지 않고 같은 PR diff에 포함되어 Reviewer가 머지 직전 최종 점검할 때 함께 검토된다.
 > - **다음 작업 후보 자동 추출**: PR 본문에 `## 다음 작업` (또는 `## Next steps`, `## Follow-up`, `## 후속`) 섹션이 있으면 그 내용이 자동으로 채워진다. **절대적 지시가 아니라 후보**이므로 다음 작업자는 참고만 하고 우선순위·문맥에 따라 자유롭게 결정한다.
+> - **머지 전 최종 점검**: Reviewer 또는 작성자는 머지 직전 자동 생성된 HANDOFF 항목을 읽고 사실관계·다음 작업 후보가 적절한지 확인한다. 부적절하면 그 PR에서 직접 수정 후 머지.
 > - **수동 append (선택)**: 세션을 끝낼 때 PR로 안 묶이는 메모(WIP, 디버깅 발견, 후속 TODO)는 이 파일 하단에 직접 추가해도 된다.
 
 ## 포맷

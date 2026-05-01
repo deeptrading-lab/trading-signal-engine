@@ -1,60 +1,60 @@
-name: handoff-append
+name: handoff-on-qa-passed
 
 on:
   pull_request:
-    types: [closed]
+    types: [labeled]
 
 permissions:
   contents: write
-  pull-requests: write
+  pull-requests: read
 
 concurrency:
-  group: handoff-append
+  group: handoff-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
   append:
-    if: github.event.pull_request.merged == true && github.event.pull_request.head.ref != 'chore/handoff-*'
+    if: github.event.label.name == 'qa-passed' && github.event.pull_request.state == 'open'
     runs-on: ubuntu-latest
     steps:
-      - name: Skip if this PR is itself a handoff PR
-        id: guard
-        env:
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: |
-          case "$HEAD_REF" in
-            chore/handoff-*) echo "skip=true" >> "$GITHUB_OUTPUT" ;;
-            *) echo "skip=false" >> "$GITHUB_OUTPUT" ;;
-          esac
-
-      - name: Checkout main
-        if: steps.guard.outputs.skip == 'false'
+      - name: Checkout PR head branch
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Skip if HANDOFF entry for this PR already exists
+        id: check
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -f docs/HANDOFF.md ] && grep -q "(#${PR_NUMBER})" docs/HANDOFF.md; then
+            echo "entry already exists for PR #${PR_NUMBER}, skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Append handoff entry
-        if: steps.guard.outputs.skip == 'false'
+        if: steps.check.outputs.skip == 'false'
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_MERGED_AT: ${{ github.event.pull_request.merged_at }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           set -euo pipefail
-          DATE=$(date -u -d "$PR_MERGED_AT" +%Y-%m-%d 2>/dev/null || date -u +%Y-%m-%d)
+          DATE=$(date -u +%Y-%m-%d)
           SLUG="${PR_HEAD_REF#feature/}"
           mkdir -p docs
           if [ ! -f docs/HANDOFF.md ]; then
             printf '# HANDOFF — 작업 인수인계 로그\n\n## 로그\n\n' > docs/HANDOFF.md
           fi
 
-          # PR 본문에서 "## 다음 작업" 또는 "## Next" 또는 "## Follow-up" 섹션 추출
+          # PR 본문에서 "## 다음 작업" / "## Next" / "## Follow-up" / "## 후속" 섹션 추출
           NEXT=$(printf '%s\n' "${PR_BODY:-}" | awk '
             BEGIN { flag = 0 }
             /^##[[:space:]]*(다음 작업|다음|Next( steps)?|Follow[- ]?up|후속)/i { flag = 1; next }
@@ -67,9 +67,9 @@ jobs:
             printf -- '- **slug**: `%s` · **author**: @%s\n' "$SLUG" "$PR_AUTHOR"
             printf -- '- **PR**: %s\n' "$PR_URL"
             printf -- '- **요약**: %s\n' "$PR_TITLE"
-            printf -- '- **현재 상태**: main 머지됨\n'
+            printf -- '- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)\n'
             if [ -n "${PR_BODY:-}" ]; then
-              printf -- '- **PR 본문**:\n'
+              printf -- '- **PR 본문 발췌**:\n'
               printf '%s\n' "$PR_BODY" | head -n 30 | sed 's/^/  > /'
             fi
             if [ -n "$NEXT" ]; then
@@ -80,33 +80,25 @@ jobs:
             fi
           } >> docs/HANDOFF.md
 
-      - name: Create branch, commit, open PR, auto-merge
-        if: steps.guard.outputs.skip == 'false'
+      - name: Commit and push to PR branch
+        if: steps.check.outputs.skip == 'false'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
-          if git diff --quiet docs/HANDOFF.md; then
-            echo "no handoff changes — nothing to PR"
-            exit 0
-          fi
-          BRANCH="chore/handoff-${PR_NUMBER}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
           git add docs/HANDOFF.md
-          git commit -m "docs(handoff): #${PR_NUMBER} 머지 자동 기록"
-          git push origin "$BRANCH"
-
-          PR_BODY_OUT=$(printf 'PR #%s (%s) 머지 후 자동 생성된 HANDOFF 기록입니다.\n\n- 원본 PR: #%s\n- 자동 생성: handoff-append.yml\n' "$PR_NUMBER" "$PR_TITLE" "$PR_NUMBER")
-          gh pr create \
-            --base main \
-            --head "$BRANCH" \
-            --title "docs(handoff): #${PR_NUMBER} 머지 자동 기록" \
-            --body "$PR_BODY_OUT"
-
-          # auto-merge: 보호 규칙·체크가 있다면 통과 후 자동 머지, 없으면 즉시 머지
-          gh pr merge "$BRANCH" --merge --delete-branch --auto || \
-            gh pr merge "$BRANCH" --merge --delete-branch
+          if git diff --staged --quiet; then
+            echo "no changes to commit"
+            exit 0
+          fi
+          git commit -m "docs(handoff): #${PR_NUMBER} QA 통과 시점 자동 기록 [skip ci]"
+          for i in 1 2 3; do
+            git pull --rebase origin "$PR_HEAD_REF" && git push origin "HEAD:$PR_HEAD_REF" && exit 0
+            echo "push attempt $i failed, retrying..."
+            sleep 3
+          done
+          echo "failed to push after 3 attempts"
+          exit 1

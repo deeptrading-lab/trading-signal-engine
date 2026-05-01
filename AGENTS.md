@@ -120,6 +120,7 @@ UI·유저 인터랙션이 PRD에 포함될 때 합류합니다.
 
 - **범위**: 코드 퀄리티·아키텍처 일관성·클린 코드·보안·가독성. **PRD 수용 테스트 실행은 QA 영역**이므로 중복하지 않는다.
 - **체크**: 불필요한 복잡도·중복·부적절한 책임 분리·네이밍·예외 처리 경로. `docs/rules/review.md` 준수.
+- **HANDOFF 항목 점검**: `qa-passed` 라벨이 붙은 시점에 자동 commit된 `docs/HANDOFF.md` 항목이 PR diff에 포함된다. Reviewer는 (a) 사실관계, (b) "다음 작업 후보" 가 적절한지를 함께 검토한다. 부적절하면 직접 수정 후 머지.
 - **결과**: 승인 / 변경 요청 / 보류 중 하나. 머지 승인은 Code Reviewer가 게이트한다.
 
 ---
@@ -240,8 +241,9 @@ gh label create prd-requested prd-ready design-ready impl-wip impl-ready \
 두 사람이 비동기로 작업하기 때문에 **누가 직전에 무엇을 머지했고 무엇이 남았는지**를 빠르게 따라잡는 장치가 필요하다. [docs/HANDOFF.md](./docs/HANDOFF.md) 가 그 역할을 한다.
 
 - **시작 전**: 사람이든 AI 에이전트든 새 작업을 잡기 전 `docs/HANDOFF.md` 의 **최근 5개 항목**을 먼저 읽는다. 본인이 다시 돌아왔을 때도 동일하게 확인.
-- **자동 append**: PR이 main에 머지되면 [.github/workflows/handoff-append.yml](./.github/workflows/handoff-append.yml) 가 `chore/handoff-<PR번호>` 브랜치를 만들어 HANDOFF 항목을 commit하고, PR을 열어 자동 머지한다 (main 직접 push 금지 룰 준수).
+- **자동 append (QA 통과 시점)**: PR에 `qa-passed` 라벨이 붙으면 [.github/workflows/handoff-append.yml](./.github/workflows/handoff-append.yml) 가 **해당 PR의 feature 브랜치 자체에** HANDOFF 항목을 commit한다. 별도의 chore PR을 만들지 않으므로 PR이 한 개로 유지되고, Reviewer가 머지 직전 HANDOFF 항목까지 한 번에 최종 점검한다.
 - **다음 작업 후보 자동 추출**: PR 본문에 `## 다음 작업` (또는 `## Next steps`, `## Follow-up`, `## 후속`) 섹션을 넣으면 그 내용이 HANDOFF에 자동 채워진다. **후보일 뿐 절대적 지시가 아니다.** 다음 작업자(사람·AI 모두)는 참고만 하고 우선순위·문맥에 따라 자유롭게 결정한다.
+- **머지 전 최종 점검**: Reviewer는 PR diff에서 HANDOFF 항목을 함께 검토한다. 사실관계·다음 작업 후보가 부적절하면 PR에서 직접 수정 후 머지한다.
 - **수동 append (선택)**: PR로 묶이지 않는 메모(WIP 중단, 디버깅 발견, 후속 TODO)는 세션 끝에 직접 추가해도 된다. `### YYYY-MM-DD — [WIP] 제목` 형태로 적는다.
 - **순서**: 위가 오래된 항목, 아래가 최신. 최근 항목은 파일 하단에서 읽는다.
 
