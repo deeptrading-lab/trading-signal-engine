@@ -2,8 +2,9 @@
 명령 응답 텍스트 생성.
 
 PRD AC-2, AC-3, AC-4 — `ping`/`status`/fallback.
-외부 노출 텍스트에 트레이딩 도메인 키워드(signal/trade/desk/quant/finance/market/
-ticker/pnl 등)를 포함하지 않는다. 봇 자기 지칭은 "코디네이터" 표현 사용.
+외부 노출 텍스트에는 도메인 키워드를 포함하지 않는다 — 정확한 정책 목록은
+`ai.coordinator._compliance.FORBIDDEN_KEYWORDS` 단일 정의 지점을 참조한다.
+봇 자기 지칭은 "코디네이터" 표현 사용.
 """
 
 from __future__ import annotations

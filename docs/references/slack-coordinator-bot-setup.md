@@ -21,7 +21,7 @@
 
 회사 Slack은 동료 가시성이 있으므로 봇의 **표시명/설명/응답 메시지/로그**에 트레이딩 도메인이 드러나면 안 됩니다.
 
-**금지 키워드**: `signal`, `trade`, `trading`, `desk`, `quant`, `finance`, `market`, `ticker`, `pnl`
+**금지 키워드 정의**: 단일 출처(SSoT)는 [`ai/coordinator/_compliance.py`](../../ai/coordinator/_compliance.py)의 `FORBIDDEN_KEYWORDS` 상수를 참조하세요. 정책 추가·변경 시 본 가이드는 수정할 필요가 없습니다.
 
 - ✅ 허용: 코드 내부 변수명·디렉토리명·패키지명 (`ai/coordinator/`, `route_command` 등)
 - ❌ 금지: App Name, Display Name, Description, 응답 메시지 본문, 로그 출력, 커밋/PR 제목
