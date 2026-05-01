@@ -77,10 +77,14 @@ PM은 PRD만 전달하고, 개발자(Frontend/Backend)는 **PRD에 없는 기능
 UI·유저 인터랙션이 PRD에 포함될 때 합류합니다.
 
 - **유저 시나리오**: 주요 태스크 플로우(예: 신호 확인 → 승인 → 주문 실행)
-- **디자인 시스템 가이드**: 사용할 컴포넌트(shadcn/ui 등), 토큰(색·타이포·간격), 상태 표현 규칙
-- **핸드오프 산출물**: Frontend Dev가 바로 구현할 수 있는 수준의 명세(스펙·상태·에러 케이스 포함)
+- **디자인 시스템 가이드 (DESIGN.md 포맷 필수)**:
+  - 단일 진실 소스: 모든 `docs/design/<slug>.md`는 [Google Labs **DESIGN.md**](https://github.com/google-labs-code/design.md) 포맷을 따릅니다. 포맷 상세는 [`docs/rules/design-md.md`](docs/rules/design-md.md) 참조.
+  - YAML front matter에 토큰(`colors`, `typography`, `rounded`, `spacing`, `components`)을 정의하고, 본문은 표준 섹션 순서(Overview → Colors → Typography → Layout → Elevation & Depth → Shapes → Components → Do's and Don'ts)로 작성합니다.
+  - 색·간격은 토큰 참조(`{colors.primary}`)로만 연결합니다. 코드·컴포넌트에 hex/px를 직접 박지 않습니다.
+- **검증**: 산출 직전 `npx @google/design.md lint docs/design/<slug>.md`를 실행하고 **error 0건**을 확인합니다. lint 요약을 PR/응답에 첨부합니다.
+- **핸드오프 산출물**: Frontend Dev가 바로 구현할 수 있는 수준의 명세(스펙·상태·에러 케이스 포함). Frontend는 front matter의 토큰을 그대로 사용합니다.
 
-디자이너는 코드 커밋·머지 승인을 하지 않습니다. Frontend Dev가 가이드를 따르지 않는다고 판단되면 Code Reviewer와 함께 변경을 요청합니다.
+디자이너는 코드 커밋·머지 승인을 하지 않습니다. Frontend Dev가 가이드를 따르지 않는다고 판단되면(예: 토큰 미사용, 임의 hex) Code Reviewer와 함께 변경을 요청합니다.
 
 ---
 
