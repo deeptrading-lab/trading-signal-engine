@@ -114,4 +114,3 @@
   - 머지 후 다음 PR부터는 본문에 `## 다음 작업` 섹션을 의식적으로 작성하여 HANDOFF 추적 품질 확인
   - 1~2주 운영 후 본문 발췌 길이(현재 30줄)가 너무 길면 축소 검토
   - main 브랜치 보호 규칙이 있다면 `github-actions[bot]` 의 feature 브랜치 push 가 막히지 않는지 첫 트리거 시 확인
-  🤖 Generated with [Claude Code](https://claude.com/claude-code)

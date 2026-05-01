@@ -54,12 +54,16 @@ jobs:
             printf '# HANDOFF — 작업 인수인계 로그\n\n## 로그\n\n' > docs/HANDOFF.md
           fi
 
-          # PR 본문에서 "## 다음 작업" / "## Next steps" / "## Follow-up" / "## 후속 작업" 섹션 추출
+          # PR 본문에서 "## 다음 작업" / "## Next steps" / "## Follow-up" / "## 후속 작업" 섹션 추출.
           # gawk IGNORECASE 사용 (GitHub-hosted ubuntu runner 의 awk 는 gawk).
+          # 종결: 다음 ## 헤딩 / 수평선(---) / Claude Code 푸터(🤖) / HTML 주석.
           NEXT=$(printf '%s\n' "${PR_BODY:-}" | awk '
             BEGIN { flag = 0; IGNORECASE = 1 }
             /^##[[:space:]]*(다음 작업|Next( steps)?|Follow[- ]?up|후속 작업)/ { flag = 1; next }
             /^##[[:space:]]/ { flag = 0 }
+            /^---+[[:space:]]*$/ { flag = 0 }
+            /^[[:space:]]*🤖/ { flag = 0 }
+            /^[[:space:]]*<!--/ { flag = 0 }
             flag { print }
           ' | sed '/^[[:space:]]*$/d' | head -n 15)
 
