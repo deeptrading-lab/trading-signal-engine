@@ -71,16 +71,14 @@ def _build_pre_tool_use_hook(
     audit_recorder 는 audit.jsonl 에 한 줄 append 하는 callable. 본 hook 은
     `tool_policy.evaluate` 결과에 따라 deny/allow 를 SDK 에 돌려준다.
     """
-    from claude_agent_sdk import (
-        HookJSONOutput,
-        PreToolUseHookInput,
-    )
+    from claude_agent_sdk import PreToolUseHookInput
+    from claude_agent_sdk.types import SyncHookJSONOutput
 
     async def _hook(
         input_data: PreToolUseHookInput,
         tool_use_id: str | None,
         context: Any,
-    ) -> HookJSONOutput:
+    ) -> SyncHookJSONOutput:
         tool_name = input_data.get("tool_name", "")
         tool_input = input_data.get("tool_input", {})
         decision: ToolDecision = evaluate(tool_name, tool_input)
@@ -95,7 +93,7 @@ def _build_pre_tool_use_hook(
                     "brief": decision.brief,
                 }
             )
-            return HookJSONOutput()
+            return {}
 
         audit_recorder(
             {
