@@ -20,6 +20,8 @@ for: <github-user, 기본은 `git config user.name` 또는 현재 사용자>
 write: <true|false>
 
 AGENTS.md의 핸드오프 표와 GitHub 라벨 플로우를 기준으로 모든 slug의 현재 단계를 판정하고, 블록·경고·추천 액션을 리포트하라. read-only 원칙을 엄격히 지켜라.
+
+**필수**: 리포트 작성 전 `docs/SESSION_NOTES.md` 최신 1~2개 항목과 `docs/HANDOFF.md` 최근 5개 항목을 먼저 읽고, 직전 세션의 사용자 합의·미결 결정(예: "PRD 검토 후 PR 등록", "untracked 보류는 의도적")을 권고에 반영하라. 리포트 끝에 두 파일을 실제로 읽었음을 1줄로 명시.
 """)
 ```
 
