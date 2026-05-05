@@ -306,3 +306,34 @@
   - (선택) 다음 세션 시작 시 본 PR 의 SESSION_NOTES 최신 항목을 컨텍스트로 사용. 동작이 의도대로면 정책 정착, 아니면 옵션 1/2 추가 검토.
   - `dev-relay-agent-integration` PRD 초안 [별도 PR](docs/prd/dev-relay-agent-integration.md) 로 처리 (사용자 검토 후).
   - shell metachar 정책 완화 (`feat/dev-relay-shell-pipe-allow`) — 직전 세션 P1, 추천 다음 트랙 1순위.
+
+### 2026-05-05 — docs(qa): handoff-session-notes 리포트 backfill (#39)
+
+- **slug**: `qa-handoff-session-notes-backfill` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/39
+- **요약**: docs(qa): handoff-session-notes 리포트 backfill
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## Summary
+  > 
+  > - PR #38 머지 후 사후 작성된 QA 리포트(`docs/qa/handoff-session-notes.md`)를 단독 chore PR 로 backfill.
+  > - 리포트 자체는 PR #38 QA 통과 시점에 검증된 것 (5/5 AC PASS, 회귀 513 passed). 본 PR 에서 다시 검증 불필요.
+  > 
+  > ## 배경
+  > 
+  > PR #38 자체에 QA 리포트를 동봉하지 못한 이유 — QA 에이전트가 PR #38 머지 직후 리포트를 작성했고 (자동 hook 없음), main 으로 commit 되지 않은 채 워킹 디렉토리에만 남아 있었다. 새 세션에서 untracked 상태로 발견되어 분리 PR 로 처리.
+  > 
+  > ## Test plan
+  > 
+  > - [x] 파일 내용은 PR #38 QA 통과 시점에 이미 검증됨.
+  > - [ ] reviewer 가 본 PR 자체를 검토 (docs-only chore).
+  > 
+  > ## 다음 작업
+  > 
+  > - (구조 보강 후순위) QA 에이전트가 PR 머지 직후 리포트를 자동 동봉하도록 자동화 검토 — 본 PR 처럼 backfill 필요 사례가 반복되면 진행.
+  > 
+  > ## Refs
+  > 
+  > - PR #38 (SESSION_NOTES 도입, merged `3dbb3ca`)
+- **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):
+  - (구조 보강 후순위) QA 에이전트가 PR 머지 직후 리포트를 자동 동봉하도록 자동화 검토 — 본 PR 처럼 backfill 필요 사례가 반복되면 진행.
