@@ -60,18 +60,22 @@
 - #11 — 이슈 우선순위 정책 (P0/P1/P2) 추가
 - #3 — 코디네이터 인바운드 데몬 도입 (Socket Mode)
 
-**진행 중 (open)**
+> **NOTE (2026-05-05)**: 아래 "진행 중 (open)" / "TODO" 두 소섹션은 backfill 시점 (2026-05-02) 의 스냅샷으로, **이미 모두 처리되어 stale 상태**다. 자연어 봇이 정보원으로 인용해 사실관계 오답을 낸 사례가 있어 strikethrough 처리했다. **현재 진행 중인 작업은 본 파일 최하단 항목 + GitHub PR/이슈 라벨로 확인** 한다.
+>
+> ~~PR #25 / PR #27 / Issue #24 모두 머지·종료 완료. 자세한 entry 는 본 파일 하단 자동 생성 항목 참조.~~
 
-- **PR #25** `feature/slack-dev-relay` — 개발 협업 Slack 봇 MVP 구현. 라벨 `impl-ready`, **QA 대기 중**. 다음 단계: QA → `qa-passed` → Reviewer → 머지.
-- **PR #27** `feature/handoff-system` — 본 HANDOFF 시스템. 라벨 미부여 (이 PR이 곧 자기 자신을 검증하게 됨).
-- **Issue #24** `[slack-dev-relay]` PRD-ready, P1 — PR #25 가 그 구현체.
+~~**진행 중 (open)** *(stale, 위 NOTE 참조)*~~
 
-**TODO / 다음 작업 후보 (절대적 지시 아님, 후보)**
+- ~~**PR #25** `feature/slack-dev-relay` — QA 통과 후 머지됨 (`8063b68`). 본 파일 하단 자동 entry 참조.~~
+- ~~**PR #27** `feature/handoff-system` — 머지됨 (자기 자신 자가 트리거 케이스 검증 통과).~~
+- ~~**Issue #24** `[slack-dev-relay]` — PR #25 머지로 close.~~
 
-- PR #25 QA 진행 → `qa-passed` 라벨 부여 (본 워크플로우의 첫 자가 트리거 케이스가 됨)
-- PR #27 (HANDOFF 시스템) `qa-passed` → Reviewer → 머지 → 동작 검증
-- HANDOFF 자동화 동작 확인 후 1~2주 운영, 본문 발췌 길이/노이즈 점검
-- 본 backfill 항목은 PR #27 머지 후 첫 자동 entry 가 추가되기 전까지 임시 기준점 역할
+~~**TODO / 다음 작업 후보** *(stale, 위 NOTE 참조)*~~
+
+- ~~PR #25 QA 진행 → `qa-passed` 라벨 부여 — 완료~~
+- ~~PR #27 (HANDOFF 시스템) `qa-passed` → Reviewer → 머지 — 완료~~
+- ~~HANDOFF 자동화 동작 확인 후 1~2주 운영 — 진행 중 (정상 동작 확인됨, PR #27/#25 entry 가 자동 추가된 것이 그 증거)~~
+- ~~본 backfill 항목은 PR #27 머지 후 첫 자동 entry 가 추가되기 전까지 임시 기준점 역할 — 역할 종료~~
 
 ### 2026-05-01 — HANDOFF 인수인계 로그 + qa-passed 시점 자동 append 워크플로우 (#27)
 
@@ -157,3 +161,27 @@
   - 실 reviewer agent 통합 PR (AC-4 / AC-5 2단계 / AC-14 의 deferred 항목을 살리는 후속 PRD/PR)
   - launchd plist 자동 설치 (PRD 부록 B) 가 필요해질 시점에 별도 PRD
   - 구독 quota 사용량 모니터링 (Max 20x 한도 진단) — 일상 운영 데이터가 쌓이면 cost-aware-llm-pipeline 가드 통합 검토
+
+### 2026-05-05 — chore: Makefile — daemon/test/install 명령 정리 (#33) / pip → python -m pip 후속 fix (#34)
+
+- **slug**: `makefile` · **author**: @HY0118 (수동 entry — chore 라벨이라 qa-passed 자동 append 미적용)
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/33 + https://github.com/deeptrading-lab/trading-signal-engine/pull/34
+- **요약**: 데몬 실행·테스트 등 평문으로 PRD 부록에만 적혀 있던 명령을 루트 `Makefile` 한 장으로 모음. 두 봇 (coordinator / dev_relay) 데몬 타겟 분리. 이후 `pip` shim 없는 venv (uv-managed 등) 회귀를 `python -m pip` 으로 일반화 fix.
+- **현재 상태**: 둘 다 main 머지 완료 (`bf45789`, `84532a6`).
+- **다음 작업 후보**:
+  - HANDOFF.md / README.md 에 "make help 부터 보세요" 한 줄 추가 검토 (별도 docs PR)
+  - 명령이 더 늘면 그때 pyproject.toml + 콘솔 entry point 마이그레이션 검토
+
+### 2026-05-05 — [WIP] feat(dev-relay): Phase 1 자연어 분기 — A.2 수동 검증 중 (#32)
+
+- **slug**: `dev-relay-natural-language` · **author**: @HY0118 (수동 WIP entry — qa-passed 라벨 부여 시점에 정식 자동 entry 가 위에 append 됨)
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/32 — 라벨 `impl-ready`, QA 대기 중.
+- **요약**: PRD `dev-relay-natural-language` Phase 1 (read-only 자연어 에이전트 루프) 구현. SDK 0.1.73 / Haiku 분류 + Sonnet 응답 / PreToolUse hook / 30분 만료 세션 / B-2 URL placeholder escape.
+- **현재 상태**:
+  - 자동 테스트 484건 통과 (회귀 0건)
+  - 수동 검증 진행 중: A.1 (PASS, 추정), A.2 (부분 PASS — 응답 도착·Block Kit 분할·다중 정보원 종합 OK / 단 사실관계 오류 발견 — 본 backfill stale 인용이 원인 → 본 PR 로 수정), A.3~A.8 미진행
+  - 수동 검증 중 SDK 버그 1건 발견·수정: `HookJSONOutput()` 호출 → `'types.UnionType' object is not callable` 에러. fix 커밋 `c8e69ce`. PR #32 에 통합.
+- **다음 작업 후보**:
+  - A.3~A.8 마저 진행해 전체 부록 A QA 완료
+  - QA 보고서 (`docs/qa/dev-relay-natural-language.md`) 작성 후 `qa-passed` 라벨
+  - **shell metachar 정책 완화 후속 PR** (`feat/dev-relay-shell-pipe-allow`) — `| head` / `2>/dev/null` 같은 read-only 패턴 한정 허용. A.2 검증 중 LLM 이 `gh pr view ... 2>/dev/null || ...` 시도하다 차단된 사례 다수.
