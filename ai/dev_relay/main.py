@@ -394,7 +394,9 @@ def _handle_natural_language(
     if existing is not None:
         if is_expired(existing):
             logger.info("session expired, restarting: thread_ts=%s", thread_ts)
-            safe_say(say, SESSION_RESTARTED_NOTICE, logger, context="session_expired")
+            # NL 분기 응답은 thread_ts 에 묶어 발사 — 사용자가 같은 스레드 답글로
+            # 후속 turn 을 보내면 session resume 가 발동된다 (PRD §3.3).
+            say(SESSION_RESTARTED_NOTICE, thread_ts=thread_ts)
             # 만료된 세션은 신규 시작으로 간주 — resume 하지 않는다.
             resume_session_id = None
         else:
@@ -451,10 +453,14 @@ def _handle_natural_language(
                 )
 
     # 메시지 발사 — 차례로. Sonnet 분기는 Block Kit 분할로 다중 chunk 가능.
+    # NL 분기 응답은 항상 thread_ts 에 묶어 발사 — 사용자가 후속 답글을 같은
+    # 스레드에 보내면 session resume 가 발동된다. 데몬이 thread_ts 를 안 박으면
+    # 봇 응답이 top-level DM 메시지로 발사되어 사용자가 reply-in-thread UI 를
+    # 사용할 수 없고 매 turn 이 새 세션이 된다 (PRD §3.3 의도와 어긋남).
     for message in result.messages:
         # 발사 직전 한 번 더 가드 (다중 layer 안전망).
         safe = guard_text_with_urls(message)
-        say(safe)
+        say(safe, thread_ts=thread_ts)
 
 
 def build_app(
