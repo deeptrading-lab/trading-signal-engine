@@ -114,3 +114,46 @@
   - 머지 후 다음 PR부터는 본문에 `## 다음 작업` 섹션을 의식적으로 작성하여 HANDOFF 추적 품질 확인
   - 1~2주 운영 후 본문 발췌 길이(현재 30줄)가 너무 길면 축소 검토
   - main 브랜치 보호 규칙이 있다면 `github-actions[bot]` 의 feature 브랜치 push 가 막히지 않는지 첫 트리거 시 확인
+
+### 2026-05-05 — feat(slack-dev-relay): MVP 데몬 구현 (#25)
+
+- **slug**: `slack-dev-relay` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/25
+- **요약**: feat(slack-dev-relay): MVP 데몬 구현 — Slack DM 명령으로 로컬 Claude Agent SDK 세션을 트리거하는 단일 프로세스 봇. PR amend 로 구독 모드 인증(claude CLI 승계) 추가, `.env.local` 분리.
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (사용자 PC + Slack 워크스페이스에서 수동 검증 완료, audit log/취소 흐름/구독 모드 시작 로그까지 확인)
+- **PR 본문 발췌**:
+  > ## 요약
+  > 
+  > `docs/prd/slack-dev-relay.md` 의 MVP 데몬을 구현합니다. Slack DM 명령을 받아 로컬 큐에 적재하고 Block Kit 버튼으로 2단계 승인을 받아 Claude Agent SDK 세션을 트리거하는 단일 프로세스 봇입니다.
+  > 
+  > Closes #24
+  > 
+  > ## 변경 범위
+  > 
+  > ### 신규 패키지: `ai/dev_relay/`
+  > - `__init__.py` / `main.py` — Socket Mode 진입점, audit log, rate limit, graceful shutdown
+  > - `config.py` — 환경변수 검증 (xoxb / xapp / sk-ant prefix + placeholder 차단)
+  > - `auth.py` — 화이트리스트 + user_id 마스킹 (앞 6자)
+  > - `queue.py` — SQLite 단일 파일 (`~/.local/state/dev_relay/queue.db`), 멱등성·동시 1건·재시작 복구
+  > - `dispatcher.py` — 3개 명령 (`status` / `review pr <N>` / `merge pr <N>`) 파싱 + destructive op 1차 차단
+  > - `agent_runner.py` — SDK 호출 worker thread + destructive op 2차 차단
+  > - `slack_renderer.py` — Block Kit 빌더 + 발사 직전 컴플라이언스 가드 + 정적 템플릿 import 시점 검증
+  > 
+  > ### 신규 테스트: `ai/tests/dev_relay/`
+  > - `test_dispatcher.py` — 36 케이스 (명령 파싱·정규화·destructive 검출)
+  > - `test_queue.py` — 13 케이스 (멱등성·상태 전이·재시작 시뮬레이션)
+  > - `test_auth.py` — 17 케이스 (화이트리스트·마스킹·액션 페이로드)
+  > - `test_compliance.py` — 39 케이스 (runtime 가드·Block Kit 빌더·PRD/소스 정적 검사)
+  > - `test_config.py` — 추가 (필수/선택 토큰, auth_mode, 마스킹·placeholder·prefix 검증)
+  > 
+  > ### 의존성
+  > - `ai/requirements.txt` 에 `claude-agent-sdk>=0.1.72,<0.2` 추가
+  > 
+  > ### amend (구독 모드 + .env.local)
+  > - `ANTHROPIC_API_KEY` 를 선택으로 강등 — 미설정 시 구독 모드 (`claude` CLI 인증 승계)
+  > - 시작 로그에 `auth_mode=api_key|subscription` 1라인
+  > - dotenv 로딩 `.env` → `.env.local` (override=True). 공유 저장소이므로 개인 토큰은 `.env.local` 격리
+- **다음 작업 후보** (절대적 지시 아님):
+  - 실 reviewer agent 통합 PR (AC-4 / AC-5 2단계 / AC-14 의 deferred 항목을 살리는 후속 PRD/PR)
+  - launchd plist 자동 설치 (PRD 부록 B) 가 필요해질 시점에 별도 PRD
+  - 구독 quota 사용량 모니터링 (Max 20x 한도 진단) — 일상 운영 데이터가 쌓이면 cost-aware-llm-pipeline 가드 통합 검토

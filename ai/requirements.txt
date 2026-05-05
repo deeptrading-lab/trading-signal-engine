@@ -13,5 +13,10 @@ slack-bolt>=1.18
 # PRD: docs/prd/coordinator-dotenv-autoload.md
 python-dotenv>=1.0
 
+# 로컬 개발 협업 릴레이 데몬(Claude Agent SDK 호출 래퍼).
+# PRD: docs/prd/slack-dev-relay.md (§3.2)
+# PyPI 최신 안정판 0.1.72 기준. 0.1.x 마이너 시리즈 호환을 위해 하한만 고정.
+claude-agent-sdk>=0.1.72,<0.2
+
 # 개발·테스트 의존성 (pytest 는 테스트 실행 시 필요).
 pytest>=8.0
