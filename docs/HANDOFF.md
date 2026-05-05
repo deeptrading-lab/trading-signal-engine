@@ -337,3 +337,41 @@
   > - PR #38 (SESSION_NOTES 도입, merged `3dbb3ca`)
 - **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):
   - (구조 보강 후순위) QA 에이전트가 PR 머지 직후 리포트를 자동 동봉하도록 자동화 검토 — 본 PR 처럼 backfill 필요 사례가 반복되면 진행.
+
+### 2026-05-05 — docs(handoff): SESSION_NOTES.md read 의무화 (manager·status·AGENTS) (#40)
+
+- **slug**: `session-notes-read-mandate` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/40
+- **요약**: docs(handoff): SESSION_NOTES.md read 의무화 (manager·status·AGENTS)
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## Summary
+  > 
+  > 직전 세션에서 SESSION_NOTES.md 가 도입됐지만(#38), 그 read 의무를 manager 서브에이전트·status 스킬·AGENTS.md 진입 안내 어디에도 명시 안 했다. 결과: 다음 세션 Claude 가 `/status` 호출 시 SESSION_NOTES 를 무시하고 HANDOFF/`gh`/AGENTS.md 만 참고해 **사용자 합의(\"PRD 검토 후 PR 등록\")를 무시한 권고**를 함. 본 PR 로 read 의무를 명시한다.
+  > 
+  > ## 변경
+  > 
+  > - `AGENTS.md`
+  >   - 상단 진입 안내(line 6): "HANDOFF 최근 5개" → "**SESSION_NOTES 최신 1~2개 + HANDOFF 최근 5개**" 로 보강.
+  >   - 문서 표(line 15-): `docs/SESSION_NOTES.md` 행 추가, 두 파일의 책임 분담 명시.
+  >   - §"작업 인수인계" 섹션 보강: 두 파일이 보완 관계임 + 시작 전 읽는 순서(SESSION_NOTES → HANDOFF) + 누락 시 사례.
+  > - `.claude/agents/manager.md`: "작업 시작 전 필수 read" 절 신설. 리포트 끝에 두 파일 read 사실을 1줄로 명시 강제.
+  > - `.claude/commands/status.md`: manager 호출 프롬프트에 동일 의무 + 직전 세션 합의 반영 지시 추가.
+  > 
+  > ## Test plan
+  > 
+  > - [ ] 본 PR 머지 후 새 Claude 세션에서 `/status` 호출 시 manager 가 SESSION_NOTES 최신 항목을 실제로 읽고, 리포트 끝에 read 사실을 1줄로 명시하는지 확인.
+  > - [ ] PRD `dev-relay-agent-integration` 가 untracked 상태로 남아 있어도 manager 가 \"의도된 보류\"(SESSION_NOTES 미결·블록 절 명시) 임을 인지해 즉시 PR 화 권고를 안 하는지 확인.
+  > 
+  > ## 다음 작업
+  > 
+  > - 다른 서브에이전트(pm/qa/reviewer/devops/backend-dev/frontend-dev/ux-designer)도 SESSION_NOTES read 가 필요한지 검토. 본 PR 은 manager 만 다룬다 — pipeline 흐름 외 직접 호출은 manager 가 진입점이므로.
+  > - (운영 1~2주 후) SESSION_NOTES read 의무가 실제로 새 세션 권고 품질을 끌어올렸는지 평가. 안 됐으면 hook 자동화 검토.
+  > 
+  > ## Refs
+  > 
+  > - 누락 사례: 2026-05-06 세션 마무리 직후 새 세션 `/status` 결과.
+  > - PR #38 (SESSION_NOTES.md 도입, merged \`3dbb3ca\`).
+- **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):
+  - 다른 서브에이전트(pm/qa/reviewer/devops/backend-dev/frontend-dev/ux-designer)도 SESSION_NOTES read 가 필요한지 검토. 본 PR 은 manager 만 다룬다 — pipeline 흐름 외 직접 호출은 manager 가 진입점이므로.
+  - (운영 1~2주 후) SESSION_NOTES read 의무가 실제로 새 세션 권고 품질을 끌어올렸는지 평가. 안 됐으면 hook 자동화 검토.
