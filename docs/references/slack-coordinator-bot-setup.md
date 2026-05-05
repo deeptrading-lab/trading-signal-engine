@@ -3,9 +3,11 @@
 사용자 Slack DM ↔ 로컬 코디네이터 데몬 사이의 양방향 메시지 처리 환경을 구축하는 가이드입니다.
 
 > **이 가이드의 목적**
-> - 본인 계정에 별도 Slack App(`Hayoung AI Coordinator`)을 만들어 DM으로 명령을 받고 응답한다.
+> - 본인 계정에 별도 Slack App(`<Owner> AI Coordinator`)을 만들어 DM으로 명령을 받고 응답한다.
 > - Socket Mode를 사용해 외부 공개 URL 없이 로컬 머신에서 이벤트를 수신한다.
 > - 토큰은 `.env`로 분리해 시크릿 노출을 막는다.
+>
+> **이 가이드의 `<Owner>` 표기**: 본문의 `<Owner>`는 셋업하는 본인 이름·식별자로 치환하세요 (예: `<Owner> AI Coordinator`, `Friend AI Coordinator`). 트레이딩 키워드 회피 + 코디네이터 톤 + 워크스페이스 내 다른 사용자 봇과의 충돌 회피만 만족하면 자유롭게 정합니다.
 >
 > **`slack-mcp-setup.md`와의 차이**
 > | 구분 | slack-mcp-setup.md | 본 가이드 |
@@ -26,7 +28,7 @@
 - ✅ 허용: 코드 내부 변수명·디렉토리명·패키지명 (`ai/coordinator/`, `route_command` 등)
 - ❌ 금지: App Name, Display Name, Description, 응답 메시지 본문, 로그 출력, 커밋/PR 제목
 
-본 가이드의 모든 예시 이름(`Hayoung AI Coordinator`, `coordinator-socket` 등)은 이 원칙을 따른 결과입니다.
+본 가이드의 모든 예시 이름(`<Owner> AI Coordinator`, `coordinator-socket` 등)은 이 원칙을 따른 결과입니다.
 
 ---
 
@@ -42,13 +44,13 @@
 ## 2. Slack App 생성
 
 1. https://api.slack.com/apps → **Create New App** → **From scratch**
-2. App 이름: `Hayoung AI Coordinator` (소유자 식별 + 트레이딩 키워드 회피 + 코디네이터 톤)
+2. App 이름: `<Owner> AI Coordinator` (소유자 식별 + 트레이딩 키워드 회피 + 코디네이터 톤)
 3. workspace 선택 → **Create App**
 
 ### 2-1. Basic Information
 
 좌측 메뉴 **Basic Information** → **Display Information**:
-- **App Name**: `Hayoung AI Coordinator`
+- **App Name**: `<Owner> AI Coordinator`
 - **Short description**: `개인 워크플로우 코디네이터` (또는 비슷한 중립 표현)
 - **App icon**: 차트·금융 연상 이미지 회피, 추상 도형/이니셜/일러스트 권장
 - **Save Changes**
@@ -156,15 +158,18 @@ python -m ai.coordinator.main
 
 ### 3-4. DM 테스트
 
-Slack에서 `Hayoung AI Coordinator` DM 채널 열고 입력:
+Slack에서 `<Owner> AI Coordinator` DM 채널 열고 입력:
 
-| 입력 | 기대 응답 |
+| 입력/동작 | 기대 결과 |
 |---|---|
-| `ping` | `pong` |
-| `status` | 가동시간 / 호스트명 / 현재 시각(KST) / Python 버전 4종 |
+| `ping` 입력 | `pong` 응답 |
+| `status` 입력 | 가동시간 / 호스트명 / 현재 시각(KST) / Python 버전 4종 |
 | 알 수 없는 명령 (예: `asdf`) | 사용 가능한 명령 목록 안내 |
+| 보낸 메시지를 **편집** | 봇 응답 없음 + 로그 한 줄 (`subtype=message_changed, sender=<마스킹된 본인 ID>, type=message`) |
+| 보낸 메시지를 **삭제** | 봇 응답 없음 + 로그 한 줄 (`subtype=message_deleted, ...`) |
 
 대소문자·앞뒤 공백은 정규화됩니다 (`PING`, `  ping  ` 모두 동일).
+편집·삭제 이벤트가 무시되는 이유는 §6의 `auth.is_handleable_message_subtype` whitelist 가드 때문입니다 (PRD `slack-message-subtype-guard`).
 
 ### 3-5. 종료
 
@@ -187,6 +192,7 @@ Slack에서 `Hayoung AI Coordinator` DM 채널 열고 입력:
 | 봇 DM 입력창에 "이 앱으로 메시지를 보내는 기능이 꺼져 있습니다" | App Home → Messages Tab 토글 OFF | §2-2 토글 ON + 답장 허용 체크 |
 | 봇 메시지가 알림으로만 뜨고 사이드바에 DM 채널 안 보임 | 사용자가 봇 DM을 한 번도 안 연 상태 | Slack에서 봇 검색 → 프로필 → **Message** 한 번 보내면 정상 채널로 표시 |
 | `[코디네이터] 시작 실패: 환경변수 SLACK_BOT_TOKEN 이 설정되지 않았습니다.` | 프로젝트 루트가 아닌 곳에서 실행했거나 `.env` 가 없음 | 프로젝트 루트(또는 그 하위)에서 실행 + `.env` 파일 존재 확인. `.env` 는 자동 로딩됨 |
+| `[코디네이터] 시작 실패: 환경변수 SLACK_BOT_TOKEN 가 placeholder 값입니다.` | `.env.example` 의 placeholder(`xoxb-여기에붙여넣기` 등)를 실제 토큰으로 교체하지 않음 | `.env` 를 열어 `xoxb-...` / `xapp-...` 를 §2-6 / §2-5 에서 복사한 실제 토큰으로 교체 |
 | `pip: command not found` | venv에 pip 스크립트 누락 | `python -m pip ...` 형태로 호출, 또는 `python -m ensurepip --upgrade` |
 | `not_authed` / `invalid_auth` | 토큰 오타·만료·Reinstall 후 토큰 갱신 미반영 | OAuth & Permissions 페이지에서 최신 `xoxb` 다시 복사 |
 | `missing_scope` | Bot Token Scopes 부족 | §2-3 표 확인 후 추가 → **Reinstall to Workspace** |
@@ -200,8 +206,8 @@ Slack에서 `Hayoung AI Coordinator` DM 채널 열고 입력:
 - [ ] `.env`가 `.gitignore`에 등록되어 있고, `git status`에서 보이지 않는다
 - [ ] 토큰을 README/스크린샷/채팅에 노출한 적 없다 (의심 시 **Revoke & Reinstall**)
 - [ ] `SLACK_ALLOWED_USER_IDS`에 본인 ID만 있다 (그 외에는 응답하지 않음)
-- [ ] 봇 응답·로그·문서 어디에도 트레이딩 도메인 키워드가 없다 (자동 검증: `ai/tests/test_coordinator_handlers.py::assert_no_forbidden_keywords`)
-- [ ] 응답 발사 시 도메인 키워드 자동 검사 적용 — `ai/coordinator/_compliance.py`
+- [ ] 봇 응답·로그·문서 어디에도 트레이딩 도메인 키워드가 없다 (자동 검증: `ai/coordinator/_compliance.py::assert_no_forbidden` + 테스트 모듈에서 호출)
+- [ ] 응답 발사 시 도메인 키워드 자동 검사 적용 — `ai/coordinator/_compliance.py` (`safe_say` 가 매치 시 차단 + fallback 응답)
 - [ ] App icon/Description/Display Name이 회사 동료 시점에서 의심스럽지 않다
 
 ---
@@ -211,23 +217,31 @@ Slack에서 `Hayoung AI Coordinator` DM 채널 열고 입력:
 ```
 ai/coordinator/
 ├── __init__.py
-├── config.py     # 환경변수 로딩·검증, 토큰 마스킹 repr
-├── auth.py       # 화이트리스트 판정, 자기 메시지 무시, user id 마스킹
-├── handlers.py   # ping/status/fallback 응답 렌더링, 의존성 주입 가능한 라우터
-└── main.py       # Socket Mode 엔트리포인트, 시그널 핸들러
+├── config.py        # 환경변수 로딩·검증, placeholder 가드, 토큰 마스킹 repr
+├── auth.py          # 화이트리스트, 자기 메시지 무시, subtype 가드, sender fallback, user id 마스킹
+├── handlers.py      # ping/status/fallback 응답 렌더링, 의존성 주입 가능한 라우터
+├── _compliance.py   # 외부 노출 텍스트 가드 (FORBIDDEN_KEYWORDS SSoT, find/assert 헬퍼)
+└── main.py          # Socket Mode 엔트리포인트, _dispatch_message, safe_say, dotenv 자동 로딩, 시그널 핸들러
 ```
 
-테스트는 `ai/tests/test_coordinator_*.py`. 네트워크 의존부(slack-bolt)는 `main.build_app` 내부 지역 import라 단위 테스트는 slack-bolt 미설치 환경에서도 동작합니다.
+테스트는 `ai/tests/test_coordinator_*.py` (auth / config / handlers / dispatch / compliance / main_dotenv 별로 분리). 네트워크 의존부(slack-bolt)는 `main.build_app` 내부 지역 import라 단위 테스트는 slack-bolt 미설치 환경에서도 동작합니다.
 
 ---
 
 ## 7. 향후 확장 (Out of Scope, 별도 PRD)
 
+미구현:
 - 명령 → ai/ 파이프라인 또는 backend/ 모듈 호출 연동
-- 슬래시 커맨드, Block Kit 인터랙티브 컴포넌트
+- 슬래시 커맨드, Block Kit 인터랙티브 컴포넌트 (개발 협업 봇은 별도 PRD `slack-dev-relay`)
 - 클라우드 배포 (Cloud Run / Lambda 등 — Socket Mode 대신 HTTP webhook으로 전환)
-- `.env` 자동 로딩 — 구현됨 (PRD: [`coordinator-dotenv-autoload`](../prd/coordinator-dotenv-autoload.md))
-- 메시지 subtype 가드 — 구현됨 (PRD: [`slack-message-subtype-guard`](../prd/slack-message-subtype-guard.md))
+- macOS launchd 자동 시작 (PC 부팅 시 데몬 자동 기동)
+
+구현됨:
+- `.env` 자동 로딩 (PRD: [`coordinator-dotenv-autoload`](../prd/coordinator-dotenv-autoload.md))
+- 메시지 subtype 가드 (PRD: [`slack-message-subtype-guard`](../prd/slack-message-subtype-guard.md))
+- 컴플라이언스 가드 모듈화 / `safe_say` runtime 차단 (PRD: [`coordinator-compliance-module`](../prd/coordinator-compliance-module.md))
+- `_dispatch_message` 추출 + 통합 테스트 (PRD: [`coordinator-code-chore`](../prd/coordinator-code-chore.md), Issue #6)
+- placeholder 토큰 fail-fast 가드 (PRD: [`coordinator-code-chore`](../prd/coordinator-code-chore.md), Issue #10)
 
 ---
 
