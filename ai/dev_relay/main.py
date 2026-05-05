@@ -7,9 +7,10 @@ PRD: docs/prd/slack-dev-relay.md
     python -m ai.dev_relay.main
 
 동작:
-- 진입 시 `.env` 자동 로딩 (셸 export 우선, override=False).
-- 환경변수 검증 (fail-fast) → Socket Mode 클라이언트 시작.
-- `message.im` 이벤트 + `block_actions` 페이로드 처리.
+- 진입 시 `.env` (공유 기본값) → `.env.local` (개인 override, override=True) 순으로
+  자동 로딩. 친구와 공유하는 저장소이므로 개인 토큰은 `.env.local` 에만 둔다.
+- 환경변수 검증 (fail-fast) → 시작 로그에 `auth_mode=api_key|subscription` 1라인.
+- Socket Mode 클라이언트 시작 → `message.im` 이벤트 + `block_actions` 페이로드 처리.
 - 화이트리스트 외 발신자·봇 자기 메시지·destructive 명령은 무시·차단.
 - SIGINT/SIGTERM 수신 시 graceful shutdown (코디네이터 패턴 그대로).
 
@@ -453,10 +454,19 @@ def _install_interrupt_handlers(logger: logging.Logger) -> None:
 
 
 def _autoload_dotenv() -> None:
-    """프로젝트 루트의 `.env` 자동 로딩 (override=False)."""
-    dotenv_path = find_dotenv(usecwd=True)
-    if dotenv_path:
-        load_dotenv(dotenv_path, override=False)
+    """프로젝트 루트의 `.env` → `.env.local` 순으로 자동 로딩.
+
+    - `.env`: 공유 기본값 (override=False — 셸 export 가 있으면 그걸 우선).
+    - `.env.local`: 개인/머신 override (override=True — 개인 값이 공유 기본값을 덮음).
+
+    공유 저장소이므로 개인 토큰은 반드시 `.env.local` 에만 둔다 (PRD §3.7 / §6.2).
+    """
+    base_path = find_dotenv(filename=".env", usecwd=True)
+    if base_path:
+        load_dotenv(base_path, override=False)
+    local_path = find_dotenv(filename=".env.local", usecwd=True)
+    if local_path:
+        load_dotenv(local_path, override=True)
 
 
 def run() -> int:
@@ -472,6 +482,8 @@ def run() -> int:
 
     logger = _setup_logging(config.log_level)
     logger.info("Dev Manager 데몬을 시작합니다. %s", config.with_masked_repr())
+    # PRD AC-9 (b/c) — 인증 모드를 시작 직후 1라인으로 명시해 의도 확인 가능.
+    logger.info("auth_mode=%s", config.auth_mode.value)
 
     queue = JobQueue()
     # PRD §3.4 — 재시작 복구.

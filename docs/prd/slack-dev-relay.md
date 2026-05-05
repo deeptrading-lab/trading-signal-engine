@@ -71,7 +71,7 @@ PM 결정사항:
 - **신규 패키지**: `ai/dev_relay/` (기존 `ai/coordinator/` 와 형제 디렉토리, 동일 컨벤션)
   - `ai/dev_relay/__init__.py`
   - `ai/dev_relay/main.py` — 엔트리포인트 (`python -m ai.dev_relay.main`)
-  - `ai/dev_relay/config.py` — 환경변수 검증 (`SLACK_DEV_RELAY_BOT_TOKEN`, `SLACK_DEV_RELAY_APP_TOKEN`, `DEV_RELAY_ALLOWED_USER_IDS`, `ANTHROPIC_API_KEY`)
+  - `ai/dev_relay/config.py` — 환경변수 검증 (`SLACK_DEV_RELAY_BOT_TOKEN`, `SLACK_DEV_RELAY_APP_TOKEN`, `DEV_RELAY_ALLOWED_USER_IDS` 필수 / `ANTHROPIC_API_KEY` 선택 — 미설정 시 구독 모드)
   - `ai/dev_relay/auth.py` — 화이트리스트 판정 (코디네이터 `auth.py` 와 같은 패턴, 별도 모듈로 둔다 — 정책이 봇별로 갈릴 수 있음)
   - `ai/dev_relay/queue.py` — 작업 큐 (SQLite 단일 파일)
   - `ai/dev_relay/dispatcher.py` — 명령 파싱 + 라우팅
@@ -157,8 +157,11 @@ DM 메시지 본문에 다음 텍스트를 정확히 일치(앞뒤 공백 trim, 
 - **실행 형태**: 단일 프로세스 데몬 (`python -m ai.dev_relay.main`).
 - **graceful shutdown**: SIGINT/SIGTERM 수신 시 처리 중인 job 1건은 끝까지 마치고(또는 일정 timeout 내 미완 시 `failed` 마킹) 종료. 코디네이터의 시그널 핸들러 패턴과 동일.
 - **로깅**: 표준 `logging`. 기본 `INFO`, 환경변수 `LOG_LEVEL` override. 토큰 평문 절대 미출력 — 코디네이터의 마스킹 헬퍼 재사용.
-- **시작 시 환경변수 검증**: `SLACK_DEV_RELAY_BOT_TOKEN`(prefix `xoxb-`), `SLACK_DEV_RELAY_APP_TOKEN`(prefix `xapp-`), `ANTHROPIC_API_KEY`(prefix `sk-ant-`), `DEV_RELAY_ALLOWED_USER_IDS` 가 없거나 형식이 틀리면 한 줄 에러 + exit != 0.
-- **dotenv 자동 로딩**: 진입점에서 `load_dotenv(override=False)` (코디네이터 패턴 그대로).
+- **시작 시 환경변수 검증**:
+  - **필수**: `SLACK_DEV_RELAY_BOT_TOKEN`(prefix `xoxb-`), `SLACK_DEV_RELAY_APP_TOKEN`(prefix `xapp-`). 누락·prefix 오류 시 한 줄 에러 + exit != 0.
+  - **선택**: `ANTHROPIC_API_KEY`(prefix `sk-ant-`). **설정되어 있으면 API 키 모드**, 없거나 빈 값이면 **구독 모드** (`claude` CLI 가 보유한 인증을 SDK 가 그대로 사용 — 사용자가 사전에 `claude` 로그인 필요). 시작 시 어느 모드로 동작 중인지 INFO 로그 1라인으로 명시 (`auth_mode=api_key` 또는 `auth_mode=subscription`).
+  - **선택**: `DEV_RELAY_ALLOWED_USER_IDS` (미설정 시 코드 기본값 사용).
+- **dotenv 자동 로딩**: 진입점에서 `.env` (공유 기본값) → `.env.local` (개인/머신 별 override) 순으로 로드. `.env.local` 은 `override=True` 로 적용해 동일 키가 있으면 개인 값을 우선시한다. 친구와 공유하는 저장소이므로 개인 토큰(예: `SLACK_DEV_RELAY_*`, `ANTHROPIC_API_KEY`) 은 **반드시 `.env.local`** 에만 둔다. 두 파일 모두 `.gitignore` 의 `.env.*` 패턴으로 차단된다.
 - **컴플라이언스 가드**: `slack_renderer` 가 외부 발사 직전 모든 텍스트(메시지 본문·버튼 라벨·앱 표시 텍스트)에 `find_forbidden_keywords` 를 적용. 매치 시 발사 차단 + ERROR 로그 + 사용자에게 "응답 생성 중 오류가 발생했어요. 다시 시도해 주세요." 라는 중립 fallback 회신.
 - **rate limit**: 같은 `user_id` 가 5초 내 4번째 명령을 보내면 무시 + "잠시 후 다시 시도해 주세요" 안내 + INFO 로그.
 
@@ -244,9 +247,13 @@ QA가 그대로 체크리스트로 사용한다. **재현 절차 + 기대 결과
   - 처리 중인 job 1건이 있으면 종료 timeout(예: 30초) 까지 대기 후 미완 시 `failed` 마킹.
   - 스택 트레이스 없이 종료 메시지(`shutting down ...`) 와 함께 정상 종료 코드로 빠진다.
 
-### AC-9. 환경변수 누락 시 fail-fast
-- **재현**: `SLACK_DEV_RELAY_BOT_TOKEN`, `SLACK_DEV_RELAY_APP_TOKEN`, `ANTHROPIC_API_KEY` 중 하나 미설정 또는 잘못된 prefix 상태에서 데몬 실행.
-- **기대**: 어떤 변수가 빠졌는지/형식이 틀렸는지 한 줄 에러 메시지가 출력되고 exit != 0. 토큰 값은 출력되지 않는다.
+### AC-9. 환경변수 누락 시 fail-fast (필수 토큰만)
+- **재현 (a) 필수 토큰 누락**: `SLACK_DEV_RELAY_BOT_TOKEN` 또는 `SLACK_DEV_RELAY_APP_TOKEN` 중 하나 미설정 또는 잘못된 prefix 상태에서 데몬 실행.
+- **기대 (a)**: 어떤 변수가 빠졌는지/형식이 틀렸는지 한 줄 에러 메시지가 출력되고 exit != 0. 토큰 값은 출력되지 않는다.
+- **재현 (b) `ANTHROPIC_API_KEY` 미설정**: 두 Slack 토큰은 정상이고 `ANTHROPIC_API_KEY` 만 미설정 상태에서 데몬 실행.
+- **기대 (b)**: 데몬은 정상 시작하고, 시작 로그에 `auth_mode=subscription` 한 줄이 INFO 레벨로 찍힌다 (실제 SDK 호출 시 `claude` CLI 인증을 사용). `ANTHROPIC_API_KEY` 가 설정된 경우엔 `auth_mode=api_key` 가 찍힌다.
+- **재현 (c) `ANTHROPIC_API_KEY` prefix 오류**: 빈 문자열·placeholder 가 아닌 값이지만 `sk-ant-` prefix 가 아닌 경우.
+- **기대 (c)**: 한 줄 에러 + exit != 0 (잘못 입력된 키를 silent 하게 무시하지 않음).
 
 ### AC-10. 토큰·user_id 마스킹
 - **재현**: AC-1 ~ AC-9 의 모든 로그 출력과 audit.jsonl 내용을 grep.
@@ -312,12 +319,16 @@ QA가 그대로 체크리스트로 사용한다. **재현 절차 + 기대 결과
   - Interactivity ON
   - App Home Messages Tab ON + 사용자 메시지 허용
 - 워크스페이스에 봇 설치
-- 로컬 환경변수 (`.env` 또는 셸 rc):
-  - `SLACK_DEV_RELAY_BOT_TOKEN=xoxb-...`
-  - `SLACK_DEV_RELAY_APP_TOKEN=xapp-...`
-  - `ANTHROPIC_API_KEY=sk-ant-...`
-  - `DEV_RELAY_ALLOWED_USER_IDS=U0AE7A54NHL`
+- **인증 모드 선택 (둘 중 하나)**:
+  - **(A) 구독 모드 (권장)**: 로컬 `claude` CLI 가 Claude.ai 구독(예: Max 20x) 으로 로그인되어 있을 것. 별도 API 결제·키 발급 없이 SDK 가 CLI 인증을 그대로 승계.
+  - **(B) API 키 모드**: Anthropic Console (`console.anthropic.com`) 에서 API 키 발급 + 결제 등록.
+- 로컬 환경변수 — **개인 토큰은 `.env.local`** 에만 (친구와 공유하는 저장소이므로 분리 필수):
+  - `SLACK_DEV_RELAY_BOT_TOKEN=xoxb-...` (필수)
+  - `SLACK_DEV_RELAY_APP_TOKEN=xapp-...` (필수)
+  - `DEV_RELAY_ALLOWED_USER_IDS=U0AE7A54NHL` (선택)
+  - `ANTHROPIC_API_KEY=sk-ant-...` — 모드 (B) 일 때만. 모드 (A) 면 라인 자체를 두지 않는다.
   - (선택) `LOG_LEVEL=INFO`
+- `.env` 는 공유 기본값(현재는 코디네이터 설정) 만 두고 dev_relay 토큰은 절대 commit 되지 않는 `.env.local` 로 격리한다. 두 파일 모두 `.gitignore` 의 `.env.*` 패턴으로 보호되지만, **개인/공유 의도를 파일명으로 명시**해 사고를 줄인다.
 
 ### 6.3 보안
 
@@ -364,7 +375,9 @@ QA가 그대로 체크리스트로 사용한다. **재현 절차 + 기대 결과
 | MVP 명령 수 | **3개** (`status`, `review pr <N>`, `merge pr <N>`) |
 | 2단계 confirm 적용 명령 | `merge pr <N>` (단독 호출 또는 `[머지 검토]` 버튼 진입 모두) |
 | 컴플라이언스 정책 단일 정의 | `ai/coordinator/_compliance.py::FORBIDDEN_KEYWORDS` 재사용 (별도 셋 만들지 않음) |
-| 환경변수 prefix | `SLACK_DEV_RELAY_BOT_TOKEN`, `SLACK_DEV_RELAY_APP_TOKEN`, `ANTHROPIC_API_KEY`, `DEV_RELAY_ALLOWED_USER_IDS` |
+| 환경변수 prefix | 필수: `SLACK_DEV_RELAY_BOT_TOKEN`, `SLACK_DEV_RELAY_APP_TOKEN` / 선택: `ANTHROPIC_API_KEY`(미설정 시 구독 모드), `DEV_RELAY_ALLOWED_USER_IDS` |
+| 인증 모드 | **구독 모드 우선** (`claude` CLI 인증 승계, `ANTHROPIC_API_KEY` 미설정) / 또는 API 키 모드 (`ANTHROPIC_API_KEY` 설정) |
+| 로컬 dotenv 정책 | `.env` (공유 기본값) → `.env.local` (개인 override, `override=True`). 개인 토큰은 `.env.local` 에만. |
 
 ---
 
@@ -400,19 +413,31 @@ A.7 좌측 **Basic Information** → 기본 설명/표시명 컴플라이언스 
 
 A.8 **Install to Workspace** (또는 스코프 변경 후 재설치) → Bot User OAuth Token (`xoxb-...`) 복사.
 
-A.9 로컬 `.env` 에 토큰 등록:
+A.9 인증 모드 선택:
+
+- **(A) 구독 모드 (권장)** — Claude.ai 구독(Pro/Max) 보유 시:
+  ```
+  claude /login   # 한 번 실행, 브라우저 OAuth 로 구독 계정 인증
+  ```
+  CLI 가 자격을 디스크에 저장하므로 이후엔 데몬에서 SDK 가 자동 승계.
+- **(B) API 키 모드** — Anthropic Console 에서 키 발급 + 결제 등록 후 사용.
+
+A.10 로컬 **`.env.local`** 에 개인 토큰 등록 (공유 저장소라 `.env` 가 아닌 `.env.local`):
 ```
 SLACK_DEV_RELAY_BOT_TOKEN=xoxb-...
 SLACK_DEV_RELAY_APP_TOKEN=xapp-...
-ANTHROPIC_API_KEY=sk-ant-...
 DEV_RELAY_ALLOWED_USER_IDS=U0AE7A54NHL
+# 모드 (B) 만 — 구독 모드면 아래 줄을 추가하지 않음
+# ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-A.10 의존성 설치 후 데몬 실행:
+A.11 의존성 설치 후 데몬 실행:
 ```
 pip install -r ai/requirements.txt
 python -m ai.dev_relay.main
 ```
+
+시작 로그에 `auth_mode=subscription` 또는 `auth_mode=api_key` 가 INFO 레벨로 1라인 출력되어 의도한 모드인지 확인 가능.
 
 연결 로그 확인 후 Slack 모바일/데스크톱에서 `Hayoung Dev Manager` DM에 `status` 입력 → 5초 내 응답 확인.
 
