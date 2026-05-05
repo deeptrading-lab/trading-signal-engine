@@ -147,6 +147,27 @@ destructive 명령 자체 차단 (`is_destructive`) 은 dispatcher 에 이어 SD
 
 모든 응답은 같은 `thread_ts` 로 발사 — 사용자가 후속 답글을 같은 스레드에 보내 컨텍스트 이어가도록.
 
+#### 3.5.1 컴플라이언스 가드와 GitHub URL 충돌 회피 (B-2 결정사항)
+
+저장소 slug `trading-signal-engine` 의 `trading` 토큰이 [`ai/coordinator/_compliance.py`](../../ai/coordinator/_compliance.py) 의 `FORBIDDEN_KEYWORDS` 단어 경계 정규식에 매치되어, Sonnet 응답이 GitHub PR/이슈 URL (`https://github.com/deeptrading-lab/trading-signal-engine/...`) 을 그대로 인용하면 `safe_say` 가 차단해 사용자 가치 손상이 발생한다.
+
+**결정**: **(a) URL placeholder escape** 방식 채택.
+
+- `safe_say` 발사 직전 wrapper 가 `https?://...` URL 부분을 placeholder (`\x00URL{n}\x00`) 로 일시 치환 → `find_forbidden_keywords` 검사 → 통과 시 원복 후 발사.
+- 가드 본래 의도(외부 가시 텍스트에 도메인 키워드 노출 차단) 를 약화시키지 않으면서 GitHub URL 인용은 살린다.
+- (b) URL 영역 제외 후 검사 / (c) safe URL allow-list 는 **기각**:
+  - (b) 는 URL 안에 진짜 도메인 키워드가 끼어들어도 통과시킴 (가드 의도 약화).
+  - (c) 는 도메인 추가될 때마다 코드 변경 필요 + WebFetch 화이트리스트와 별도 운영 비용.
+
+**구현 위치**: [`ai/dev_relay/_url_escape.py`](../../ai/dev_relay/_url_escape.py) 신규 모듈에 `with_urls_escaped` / `restore_urls` 헬퍼 정의. `safe_say` 호출부에서 wrapper 로 사용. `_compliance.py` 본 모듈은 변경하지 않는다 (코디네이터 봇 회귀 0건 보장).
+
+**회귀 테스트 (AC-23, 신규)**:
+
+- `https://github.com/deeptrading-lab/trading-signal-engine/pull/25` 가 인용된 텍스트는 통과해 그대로 발사된다.
+- URL 밖 본문에 `trading` 토큰이 있으면 여전히 차단된다.
+- placeholder 토큰이 사용자에게 leak 되지 않는다 (원복 누락 회귀 보호).
+- 잘림된 URL (`https://github.com/...trading-signal` 만 있고 뒤가 끊긴 경우) 도 정규식이 잡는다.
+
 ### 3.6 prompt injection 방어
 
 - 사용자 텍스트는 SDK prompt 의 **user role 메시지로만 격리**. 시스템 프롬프트와 분리.
@@ -314,6 +335,14 @@ QA 가 그대로 체크리스트로 사용. **재현 절차 + 기대 결과** �
 ### AC-21. rate limit 회귀 (자동)
 - **재현**: 본인 user_id 가 5초 내 4건 이상의 자연어 입력을 빠르게.
 - **기대**: 4번째 이후 무시 + "잠시 후 다시 시도해 주세요" 안내. LLM 호출 없음.
+
+### AC-23. GitHub URL 인용 시 컴플라이언스 가드 통과 (자동, B-2 회귀)
+- **재현**: §3.5.1 의 URL placeholder escape wrapper 단위 테스트.
+- **기대 (4 케이스)**:
+  - 본문에 `https://github.com/deeptrading-lab/trading-signal-engine/pull/25` 만 있는 텍스트는 `find_forbidden_keywords` wrapper 가 빈 리스트를 반환해 발사된다.
+  - URL 밖 본문에 ` trading ` (공백 경계) 토큰이 있으면 wrapper 가 매치를 반환해 차단된다.
+  - wrapper 의 placeholder (`\x00URL...\x00`) 가 최종 발사 텍스트에 남지 않는다 (원복 누락 회귀 보호).
+  - URL 끝이 잘린 텍스트 (예: `... github.com/deeptrading-lab/trading-signal`) 도 정규식이 URL 로 인식해 placeholder 처리한다.
 
 ### AC-22. 외부 노출 텍스트 컴플라이언스 — 본 PRD 본문 포함 (자동)
 - **재현**: 본 PRD 본문, 부록 A·B, 신설 audit kind 문자열 (`llm_invoked`, `llm_classified`, `tool_call`, `tool_denied`, `session_started`, `session_resumed`, `llm_response_blocked`), 신설 사용자 안내 문구 ("이 도구는 Phase 1 범위 밖이라 봇이 거부했습니다." 등) 를 grep.
