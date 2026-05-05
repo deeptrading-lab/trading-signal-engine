@@ -264,3 +264,45 @@
   > - [x] `wait=True, timeout=None` / `wait=False` 기존 호출은 회귀 없음.
   > - [x] 호출 측 `main.py:809` 무수정.
 - **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
+
+### 2026-05-05 — docs: SESSION_NOTES.md 신설 + 직전·당일 세션 backfill (#38)
+
+- **slug**: `handoff-session-notes` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/38
+- **요약**: docs: SESSION_NOTES.md 신설 + 직전·당일 세션 backfill
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## Summary
+  > 
+  > - 세션 단위 자유서술 메모 파일 [docs/SESSION_NOTES.md](docs/SESSION_NOTES.md) 신설.
+  > - HANDOFF 자동화는 PR 본문 `## 다음 작업` 섹션만 추출 → **여러 PR + 사용자 합의 + follow-up 표가 섞인 세션 마무리 정리는 누락**. 직전 세션의 P1/P2/P3 follow-up 5건이 어떤 파일에도 안 남아 이번 세션 시작 시 사용자가 직접 이미지로 공유해야 했음.
+  > - 직전 세션(2026-05-05) + 당일 세션(2026-05-06) backfill, HANDOFF.md 안내에 SESSION_NOTES 참조 한 줄 추가.
+  > - 누락 QA 리포트 2건(PR #36/#37 머지 시점에 포함됐어야 함) 동봉.
+  > 
+  > ## 변경 요약
+  > 
+  > - `docs/SESSION_NOTES.md` 신설 — 형식 가이드, 작성 시점, 정책, 2026-05-05/06 두 항목.
+  > - `docs/HANDOFF.md` 상단 안내 보강 — "세션 단위 메모는 SESSION_NOTES.md 에" 한 줄.
+  > - `docs/qa/slack-dev-relay-audit-perm-ratelimit-test.md` (PR #36 누락분 동봉).
+  > - `docs/qa/slack-dev-relay-shutdown-watchdog.md` (PR #37 누락분 동봉).
+  > 
+  > ## 설계 결정 (3개 옵션 중)
+  > 
+  > | 옵션 | 채택 | 이유 |
+  > |---|---|---|
+  > | 1. Stop hook 자동화 | X | 마찰 ↑, 사용자가 안 쓸 가능성 |
+  > | 2. PR 템플릿에 `## 다음 작업` 강제 | X | 세션 단위(여러 PR 묶음)는 여전히 못 잡음 |
+  > | **3. 별도 SESSION_NOTES.md** | **O** | HANDOFF 자동화 단순성 유지 + 자유서술로 사각 보완 |
+  > 
+  > ## Test plan
+  > 
+  > - [x] `docs/SESSION_NOTES.md` 형식 가이드와 두 backfill 항목이 일관 (위 과거, 아래 최신).
+  > - [x] `docs/HANDOFF.md` 안내가 SESSION_NOTES 와 모순 없음 (PR 단위 vs 세션 단위 책임 분리 명확).
+  > - [x] QA 리포트 2건 내용 자체는 이미 검증된 것 (PR #36/#37 QA 통과 시점에 작성).
+  > - [ ] reviewer/QA 가 본 PR 자체를 검토.
+  > 
+  > ## 다음 작업
+- **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):
+  - (선택) 다음 세션 시작 시 본 PR 의 SESSION_NOTES 최신 항목을 컨텍스트로 사용. 동작이 의도대로면 정책 정착, 아니면 옵션 1/2 추가 검토.
+  - `dev-relay-agent-integration` PRD 초안 [별도 PR](docs/prd/dev-relay-agent-integration.md) 로 처리 (사용자 검토 후).
+  - shell metachar 정책 완화 (`feat/dev-relay-shell-pipe-allow`) — 직전 세션 P1, 추천 다음 트랙 1순위.
