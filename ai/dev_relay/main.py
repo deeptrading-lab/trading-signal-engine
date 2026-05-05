@@ -93,7 +93,7 @@ def _append_audit(record: dict[str, Any]) -> None:
 
     PRD §3.8 — 신규 파일 생성 시 0600 권한 적용. 이미 존재하는 파일은 사용자가
     명시적으로 권한을 풀어둔 경우를 존중해 그대로 둔다 (강제로 좁히지 않음).
-    부모 디렉터리는 `default_db_path()` 호출 측에서 0700 으로 보장된다.
+    부모 디렉터리(0700) 는 `JobQueue::_ensure_dir_secure` 가 보장한다.
     """
     path = _audit_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)

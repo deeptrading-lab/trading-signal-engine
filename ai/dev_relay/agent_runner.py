@@ -112,13 +112,45 @@ class AgentRunner:
     def shutdown(self, *, wait: bool = True, timeout: float | None = None) -> None:
         """graceful shutdown.
 
-        `wait=True` 면 진행 중·대기 중 task 가 모두 끝날 때까지 블록한다.
-        `timeout` 은 ThreadPoolExecutor 가 직접 지원하지 않으므로 본 PRD 범위에서는
-        호출자가 별도 watchdog thread 로 강제 종료를 구현한다.
+        - `wait=False`: executor 에 더 이상 task 를 받지 않게 표시하고 즉시 반환.
+        - `wait=True` + `timeout=None`: 진행 중·대기 중 task 가 모두 끝날 때까지 블록.
+        - `wait=True` + `timeout` 지정: 별도 worker thread 에서 `executor.shutdown(
+          wait=True)` 를 수행하고 `timeout` 초 동안만 join 한다. timeout 안에 끝나면
+          정상 반환, 안 끝나면 `executor.shutdown(wait=False)` 로 신규 작업만 차단한
+          뒤 WARNING 을 남기고 반환한다 (PRD §3.7 graceful shutdown 30초 보장).
+          ThreadPoolExecutor 는 진행 중인 task 를 강제 중단할 수 없으므로 worker
+          thread 자체는 task 가 끝날 때까지 살아 있을 수 있으나, 데몬 스레드라 호출
+          프로세스 종료를 막지는 않는다.
         """
         with self._lock:
             if self._closed:
                 return
             self._closed = True
-        # cancel_futures 는 Python 3.9+ 지원.
-        self._executor.shutdown(wait=wait, cancel_futures=False)
+
+        if not wait:
+            # 신규 task 만 거절하고 즉시 반환.
+            self._executor.shutdown(wait=False, cancel_futures=False)
+            return
+
+        if timeout is None:
+            # cancel_futures 는 Python 3.9+ 지원.
+            self._executor.shutdown(wait=True, cancel_futures=False)
+            return
+
+        # wait=True + timeout: 별도 thread 에서 wait=True shutdown 을 돌리고 join 으로 timeout.
+        def _drain() -> None:
+            self._executor.shutdown(wait=True, cancel_futures=False)
+
+        drainer = threading.Thread(
+            target=_drain,
+            name="dev-relay-agent-shutdown",
+            daemon=True,
+        )
+        drainer.start()
+        drainer.join(timeout)
+        if drainer.is_alive():
+            _LOGGER.warning(
+                "shutdown timeout exceeded (%.1fs) — forcing", timeout
+            )
+            # 신규 task 차단·worker 스레드는 task 종료 시 자연 회수된다.
+            self._executor.shutdown(wait=False, cancel_futures=False)
