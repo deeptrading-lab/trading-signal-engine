@@ -23,6 +23,7 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import os
 import sys
 import time
 from collections import deque
@@ -88,11 +89,23 @@ def _audit_log_path() -> Path:
 
 
 def _append_audit(record: dict[str, Any]) -> None:
-    """audit.jsonl 한 줄 append. user_id 는 호출 측이 마스킹한 값을 넘긴다."""
+    """audit.jsonl 한 줄 append. user_id 는 호출 측이 마스킹한 값을 넘긴다.
+
+    PRD §3.8 — 신규 파일 생성 시 0600 권한 적용. 이미 존재하는 파일은 사용자가
+    명시적으로 권한을 풀어둔 경우를 존중해 그대로 둔다 (강제로 좁히지 않음).
+    부모 디렉터리는 `default_db_path()` 호출 측에서 0700 으로 보장된다.
+    """
     path = _audit_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    is_new = not path.exists()
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    if is_new:
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            # Windows 등 chmod 의미가 다른 환경에서 실패해도 본문 동작 차단 금지.
+            pass
 
 
 def _setup_logging(level: str) -> logging.Logger:
