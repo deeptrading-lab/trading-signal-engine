@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from ai.coordinator._compliance import assert_no_forbidden, find_forbidden_keywords
+from ai.dev_relay._url_escape import restore_urls, with_urls_escaped
 
 # 발사 차단 시 사용자에게 보낼 fallback 메시지. 자기 자신은 정책 통과 대상.
 FALLBACK_RESPONSE: str = "응답 생성 중 오류가 발생했어요. 다시 시도해 주세요."
@@ -65,6 +66,26 @@ def guard_text(text: str | None) -> str:
     if find_forbidden_keywords(text):
         return FALLBACK_RESPONSE
     return text
+
+
+def guard_text_with_urls(text: str | None) -> str:
+    """URL 부분을 placeholder 로 escape 한 뒤 가드 검사를 수행한다.
+
+    PRD §3.5.1 (B-2) — 자연어 분기 응답이 GitHub PR/이슈 URL 을 인용해도
+    `find_forbidden_keywords` 가 URL 안의 저장소 slug 토큰에 매치되지 않도록
+    URL 을 일시 치환한다. 검사는 escape 된 본문에 대해 돌리며, 통과 시 원복한
+    텍스트(=원본 URL 포함) 를 반환한다.
+
+    - URL 이 없으면 `guard_text` 와 동일하게 동작.
+    - 매치 발견 시 placeholder 가 발사되지 않도록 fallback 으로 치환.
+    - 정상 통과 시 placeholder 가 본문에 남지 않도록 반드시 원복.
+    """
+    if not text:
+        return text or ""
+    escaped, urls = with_urls_escaped(text)
+    if find_forbidden_keywords(escaped):
+        return FALLBACK_RESPONSE
+    return restore_urls(escaped, urls)
 
 
 def guard_text_strict(text: str | None, *, context: str = "") -> None:
