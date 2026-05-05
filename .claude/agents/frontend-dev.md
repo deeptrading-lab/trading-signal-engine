@@ -16,7 +16,7 @@ model: inherit
   - 색·간격·라운드는 토큰 키(`colors.primary`, `spacing.md`)로만 참조하고 hex/px를 코드에 하드코딩하지 않는다.
   - 토큰이 부족하거나 모호하면 직접 추가하지 말고 ux-designer에게 디자인 문서 갱신을 요청한다.
 - 커밋 메시지: **한글·요점만**.
-- PR 생성 + 라벨 `impl-ready`.
+- PR 생성 시 `gh pr create --assignee @me ...` 로 작성자 본인을 assignee 로 즉시 지정 + 라벨 `impl-ready`. (`.github/workflows/auto-assign-author.yml` 이 동일하게 보장하므로 누락돼도 5~15초 내 자동 보정되지만, 즉시 가시성을 위해 플래그 권장.)
 
 ## 하지 않는 일
 - 디자인 의사결정 임의 변경 (토큰 추가·수정 포함). 필요 시 UX/UI와 합의 후 PRD/디자인 문서 갱신을 요청.

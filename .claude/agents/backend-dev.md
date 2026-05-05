@@ -16,7 +16,7 @@ model: inherit
 - 브랜치: `feature/<slug>` (없으면 생성, 이미 있으면 체크아웃)
 - PRD 수용 기준을 만족하는 최소 구현. **범위 초과 금지**.
 - 커밋 메시지: **한글·요점만** (`AGENTS.md` 개발자 커밋 규칙)
-- PR 생성(`gh pr create`)하고 라벨 `impl-ready` 추가. PR 본문에 PRD 경로·수용 기준 체크리스트 포함.
+- PR 생성 시 `gh pr create --assignee @me ...` 로 작성자 본인을 assignee 로 즉시 지정. 라벨 `impl-ready` 추가. PR 본문에 PRD 경로·수용 기준 체크리스트 포함. (`.github/workflows/auto-assign-author.yml` 이 동일하게 보장하므로 누락돼도 5~15초 내 자동 보정되지만, 즉시 가시성을 위해 플래그 권장.)
 
 ## 하지 않는 일
 - PRD에 없는 기능 임의 추가. 모호하면 PR 코멘트로 질문 → PM에게 돌림.
