@@ -3,7 +3,7 @@
 이 문서는 **사람과 AI 에이전트**가 이 저장소에서 일할 때 공통으로 따르는 **역할·순서·산출물**을 정의합니다.  
 제품·아키텍처 개요는 [README.md](./README.md)를 참고하세요.
 
-> ⚡ **모든 작업 시작 전 [docs/HANDOFF.md](./docs/HANDOFF.md)의 최근 5개 항목을 먼저 읽는다.** 직전에 무엇이 머지되었고 어떤 후속 작업이 남아 있는지 확인하기 위함이다. 사람이든 AI 에이전트든 이 단계를 건너뛰지 않는다.
+> ⚡ **모든 작업 시작 전 [docs/SESSION_NOTES.md](./docs/SESSION_NOTES.md)의 최신 1~2개 항목 + [docs/HANDOFF.md](./docs/HANDOFF.md)의 최근 5개 항목을 먼저 읽는다.** SESSION_NOTES 는 직전 세션의 사용자 합의·우선순위·미결 결정을 담고(자유서술), HANDOFF 는 PR 단위 자동 로그를 담는다. 둘은 보완 관계이며 어느 쪽도 건너뛰지 않는다. 사람이든 AI 에이전트든 동일하게 적용한다.
 
 ---
 
@@ -12,7 +12,8 @@
 | 위치 | 역할 |
 |------|------|
 | **이 파일 (`AGENTS.md`)** | 프로세스·PRD·커밋·배포 기준의 **단일 본문**. GitHub·리뷰·온보딩에서 먼저 읽습니다. |
-| **`docs/HANDOFF.md`** | 작업 인수인계 로그. 작업 시작 전 최근 항목을 읽고, PR이 머지되면 GitHub Actions가 자동 append합니다. |
+| **`docs/HANDOFF.md`** | PR 단위 작업 인수인계 로그. PR 이 머지되면 GitHub Actions 가 자동 append. 작업 시작 전 최근 5개 항목을 읽는다. |
+| **`docs/SESSION_NOTES.md`** | 세션 단위 자유서술 메모. 사용자 합의·우선순위·미결 결정 등 자동화로 못 잡는 맥락을 담는다. 작업 시작 전 최신 1~2개 항목을 먼저 읽는다. |
 | **`docs/agents/*.md`** | 다른 IDE/CLI에서도 활용 가능한 **역할별 공용 문서(원본)**. |
 | **`docs/rules/*.md`** | 다른 IDE/CLI에서도 활용 가능한 **규칙 공용 문서(원본)**. |
 | **`skills/**/SKILL.md`** | 다른 IDE/CLI에서도 활용 가능한 **스택별 공용 스킬(원본)**. |
@@ -236,11 +237,18 @@ gh label create prd-requested prd-ready design-ready impl-wip impl-ready \
 
 ---
 
-## 작업 인수인계 (HANDOFF)
+## 작업 인수인계 (HANDOFF + SESSION_NOTES)
 
-두 사람이 비동기로 작업하기 때문에 **누가 직전에 무엇을 머지했고 무엇이 남았는지**를 빠르게 따라잡는 장치가 필요하다. [docs/HANDOFF.md](./docs/HANDOFF.md) 가 그 역할을 한다.
+두 사람이 비동기로 작업하기 때문에 **누가 직전에 무엇을 머지했고 무엇이 남았는지** + **직전 세션이 무엇을 합의했는지**를 빠르게 따라잡는 장치가 필요하다. 두 파일이 분담한다.
 
-- **시작 전**: 사람이든 AI 에이전트든 새 작업을 잡기 전 `docs/HANDOFF.md` 의 **최근 5개 항목**을 먼저 읽는다. 본인이 다시 돌아왔을 때도 동일하게 확인.
+- [docs/HANDOFF.md](./docs/HANDOFF.md) — **PR 단위 자동 로그** (`qa-passed` 시점에 워크플로우가 append).
+- [docs/SESSION_NOTES.md](./docs/SESSION_NOTES.md) — **세션 단위 자유서술 메모**. 사용자 합의·우선순위·미결 결정·여러 PR 묶음 정리 등 PR 본문의 `## 다음 작업` 섹션으로 못 잡는 맥락을 담는다.
+
+- **시작 전**: 사람이든 AI 에이전트든 새 작업을 잡기 전 다음 두 가지를 먼저 읽는다.
+  1. `docs/SESSION_NOTES.md` 의 **최신 1~2개 항목** — 직전 세션의 합의된 우선순위·미결 결정을 가장 먼저 인식.
+  2. `docs/HANDOFF.md` 의 **최근 5개 항목** — 직전에 무엇이 머지·후속됐는지 보강.
+  
+  본인이 다시 돌아왔을 때도 동일하게 확인. 둘 중 한쪽만 읽으면 사용자 합의를 무시한 권고를 하게 된다(2026-05-06 사례).
 - **자동 append (QA 통과 시점)**: PR에 `qa-passed` 라벨이 붙으면 [.github/workflows/handoff-append.yml](./.github/workflows/handoff-append.yml) 가 **해당 PR의 feature 브랜치 자체에** HANDOFF 항목을 commit한다. 별도의 chore PR을 만들지 않으므로 PR이 한 개로 유지되고, Reviewer가 머지 직전 HANDOFF 항목까지 한 번에 최종 점검한다.
 - **다음 작업 후보 자동 추출**: PR 본문에 `## 다음 작업` (또는 `## Next steps`, `## Follow-up`, `## 후속`) 섹션을 넣으면 그 내용이 HANDOFF에 자동 채워진다. **후보일 뿐 절대적 지시가 아니다.** 다음 작업자(사람·AI 모두)는 참고만 하고 우선순위·문맥에 따라 자유롭게 결정한다.
 - **머지 전 최종 점검**: Reviewer는 PR diff에서 HANDOFF 항목을 함께 검토한다. 사실관계·다음 작업 후보가 부적절하면 PR에서 직접 수정 후 머지한다.
