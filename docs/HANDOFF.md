@@ -185,3 +185,42 @@
   - A.3~A.8 마저 진행해 전체 부록 A QA 완료
   - QA 보고서 (`docs/qa/dev-relay-natural-language.md`) 작성 후 `qa-passed` 라벨
   - **shell metachar 정책 완화 후속 PR** (`feat/dev-relay-shell-pipe-allow`) — `| head` / `2>/dev/null` 같은 read-only 패턴 한정 허용. A.2 검증 중 LLM 이 `gh pr view ... 2>/dev/null || ...` 시도하다 차단된 사례 다수.
+
+### 2026-05-05 — chore(dev-relay): audit.jsonl 0600 권한 + _RateLimiter 단위 테스트 (#36)
+
+- **slug**: `slack-dev-relay-audit-perm-ratelimit-test` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/36
+- **요약**: chore(dev-relay): audit.jsonl 0600 권한 + _RateLimiter 단위 테스트
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 요약
+  > 
+  > 이슈 #28 follow-up 의 1번 항목 (audit 0600 + RateLimiter 테스트) 만 처리하는 mini-PR. shutdown watchdog (#28 의 다른 항목) 은 별도 PR 로 다룬다.
+  > 
+  > ## 변경 사항
+  > 
+  > 1. **`audit.jsonl` 0600 권한 적용** — `ai/dev_relay/main.py::_append_audit` 가 신규 파일 생성 시 `os.chmod(path, 0o600)` 호출. 이미 존재하는 파일은 사용자가 명시적으로 권한을 풀어둔 경우를 존중해 건드리지 않음. PRD `docs/prd/slack-dev-relay.md` §3.8 "로컬 파일 권한 — 파일 0600" 준수.
+  > 2. **`_RateLimiter` 단위 테스트 추가** — `ai/tests/dev_relay/test_rate_limiter.py`. AC-15 회귀 보호 4 케이스:
+  >    - 같은 user_id 5초 내 3회 통과 / 4회째 차단
+  >    - 윈도우 경과 후 카운터 리셋
+  >    - 다른 user_id 독립 카운터
+  >    - 정확히 윈도우 경계 시각 (5.0초) 동작 명세 (`bucket[0] < cutoff` 동작 못박기)
+  > 
+  > `time.monotonic` 의존 회피를 위해 `now=` 인자를 주입해 결정론적 테스트.
+  > 
+  > ## 의도적으로 하지 않은 것
+  > 
+  > - `_RateLimiter` 모듈 추출 — 이슈 #28 본문의 권고이지 요구사항이 아님. blast radius 최소화를 위해 별도 PR 로 다룬다.
+  > - shutdown watchdog (#28 의 별도 항목) — 다음 PR.
+  > 
+  > ## 수용 기준 체크리스트
+  > 
+  > - [x] 신규 audit.jsonl 파일이 0600 권한으로 생성된다
+  > - [x] 기존 파일은 chmod 호출 없이 그대로 둔다
+  > - [x] `_RateLimiter` 4 케이스 테스트 통과
+  > - [x] 전체 회귀: `pytest ai/tests/ -q` 509 passed
+  > - [x] 빠른 재현: `pytest ai/tests/dev_relay/test_rate_limiter.py -v`
+  > 
+  > ## 참고
+  > 
+- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
