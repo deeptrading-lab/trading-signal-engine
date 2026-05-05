@@ -157,6 +157,44 @@ def _resolve_self_user_id(app: Any, logger: logging.Logger) -> str | None:
         return None
 
 
+# 리액션 표지 (사용자 가시성 — 처리 중 / 완료 / 에러 인지용).
+# `reactions:write` 스코프가 없으면 add/remove 가 실패하지만 본문 처리는 계속 진행.
+_REACTION_PROCESSING = "eyes"
+_REACTION_DONE = "white_check_mark"
+_REACTION_ERROR = "x"
+
+
+def _set_reaction(
+    client: Any,
+    *,
+    channel: str | None,
+    ts: str | None,
+    name: str,
+    add: bool,
+    logger: logging.Logger,
+) -> None:
+    """이모지 리액션 추가/제거. 실패는 INFO 로그만 — 본문 발사 흐름 차단 금지.
+
+    `reactions:write` 스코프가 누락된 워크스페이스에서도 데몬이 죽지 않도록
+    예외를 모두 흡수한다 (스코프는 사용자가 Slack App 콘솔에서 수동 추가하는
+    선택 권장 항목).
+    """
+    if not channel or not ts:
+        return
+    try:
+        if add:
+            client.reactions_add(channel=channel, name=name, timestamp=ts)
+        else:
+            client.reactions_remove(channel=channel, name=name, timestamp=ts)
+    except Exception as exc:  # noqa: BLE001
+        # missing_scope / already_reacted / no_reaction 모두 동일하게 흡수.
+        logger.info(
+            "reaction %s 실패 (%s): scope 누락 또는 이미 처리됨",
+            "add" if add else "remove",
+            type(exc).__name__,
+        )
+
+
 def _extract_idempotency_key(event: dict) -> str | None:
     """Slack 이벤트에서 멱등성 키 추출 (PRD §3.4).
 
@@ -461,17 +499,65 @@ def build_app(
             )
             return
         text = event.get("text") or ""
-        _handle_command(
-            text=text,
-            user_id=sender or "",
-            event=event,
-            say=say,
+        # 리액션: 사용자 가시성을 위해 :eyes: → :white_check_mark: 흐름.
+        # 실 처리에 영향 없도록 try/finally 로 감싸서 에러 시에도 :x: 표지 발사.
+        channel = event.get("channel")
+        ts = event.get("ts")
+        _set_reaction(
+            app.client,
+            channel=channel,
+            ts=ts,
+            name=_REACTION_PROCESSING,
+            add=True,
             logger=logger,
-            queue=queue,
-            rate_limiter=rate_limiter,
-            sessions=sessions,
-            nl_runtime=nl_runtime,
         )
+        try:
+            _handle_command(
+                text=text,
+                user_id=sender or "",
+                event=event,
+                say=say,
+                logger=logger,
+                queue=queue,
+                rate_limiter=rate_limiter,
+                sessions=sessions,
+                nl_runtime=nl_runtime,
+            )
+        except Exception:
+            _set_reaction(
+                app.client,
+                channel=channel,
+                ts=ts,
+                name=_REACTION_PROCESSING,
+                add=False,
+                logger=logger,
+            )
+            _set_reaction(
+                app.client,
+                channel=channel,
+                ts=ts,
+                name=_REACTION_ERROR,
+                add=True,
+                logger=logger,
+            )
+            raise
+        else:
+            _set_reaction(
+                app.client,
+                channel=channel,
+                ts=ts,
+                name=_REACTION_PROCESSING,
+                add=False,
+                logger=logger,
+            )
+            _set_reaction(
+                app.client,
+                channel=channel,
+                ts=ts,
+                name=_REACTION_DONE,
+                add=True,
+                logger=logger,
+            )
 
     @app.event("app_mention")
     def ignore_mentions(event: dict) -> None:  # noqa: ARG001

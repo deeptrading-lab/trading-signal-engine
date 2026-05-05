@@ -156,13 +156,20 @@ def guard_response_text(text: str | None) -> tuple[str, str | None]:
 
     반환: (안전한 텍스트, 차단 사유 또는 None).
     - destructive 표지 검출 → fallback + reason="destructive".
+      단, 코드 스팬·코드 블록 안의 destructive 표지는 LLM 의 *설명* 인용이라
+      간주하고 검사 대상에서 제외한다 (B-2 와 같은 escape 패턴).
     - 컴플라이언스 키워드 검출 (URL escape 후) → fallback + reason="compliance".
     - 통과 시 (URL 원복된 텍스트, None).
     """
     if not text:
         return text or "", None
+    # 코드 스팬·블록을 placeholder 로 일시 치환한 텍스트로만 destructive 검사.
+    # 백틱 없이 명령형으로 출력된 경우는 그대로 검출되어 차단된다.
+    from ai.dev_relay._code_escape import with_code_spans_escaped
+
+    escaped_for_destructive, _ = with_code_spans_escaped(text)
     try:
-        assert_no_destructive_intent(text, context="nl_response")
+        assert_no_destructive_intent(escaped_for_destructive, context="nl_response")
     except DestructiveOperationBlocked:
         return FALLBACK_RESPONSE, "destructive"
 
