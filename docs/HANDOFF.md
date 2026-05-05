@@ -224,3 +224,42 @@
   > ## 참고
   > 
 - **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
+
+### 2026-05-05 — fix(dev-relay): AgentRunner.shutdown(timeout) watchdog 보강 (#37)
+
+- **slug**: `slack-dev-relay-shutdown-watchdog` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/37
+- **요약**: fix(dev-relay): AgentRunner.shutdown(timeout) watchdog 보강
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 범위
+  > Issue #28 항목 2 (shutdown watchdog) + PR #36 nit 이월 1건.
+  > 
+  > ## 배경
+  > `AgentRunner.shutdown(timeout=...)` 은 timeout 인자를 받지만 `ThreadPoolExecutor.shutdown` 이 timeout 을 지원하지 않아 무시되고 있었다. 호출 측 `ai/dev_relay/main.py:809` 에서 30초 timeout 을 넘기지만 실제로는 무한 대기. PRD `docs/prd/slack-dev-relay.md` §3.7 (graceful shutdown 30초 timeout) 의 의도를 코드로 보장한다.
+  > 
+  > ## 변경
+  > ### 1) `AgentRunner.shutdown` watchdog (`ai/dev_relay/agent_runner.py`)
+  > - `wait=True` + `timeout` 지정: 별도 daemon thread (`dev-relay-agent-shutdown`) 에서 `executor.shutdown(wait=True)` 를 수행하고 `thread.join(timeout)` 로 대기. timeout 만료 시 `executor.shutdown(wait=False)` 로 신규 task 만 차단하고 WARNING 로그 (`shutdown timeout exceeded (%.1fs) — forcing`).
+  > - `wait=True` + `timeout=None`: 기존 동작 (무한 대기) 유지.
+  > - `wait=False`: 기존 동작 (즉시 반환) 유지.
+  > - docstring 의 "호출자가 별도 watchdog thread 로 강제 종료를 구현한다" 문구 제거.
+  > - 호출 측 `main.py:809` 는 손대지 않음 (회귀 보호).
+  > 
+  > ### 2) PR #36 nit 이월 (`ai/dev_relay/main.py::_append_audit`)
+  > - docstring 한 줄: `"부모 디렉터리는 default_db_path() 호출 측에서 0700 으로 보장된다"` → `"부모 디렉터리(0700) 는 JobQueue::_ensure_dir_secure 가 보장한다."`. 코드 동작 변경 없음.
+  > 
+  > ## 테스트 (`ai/tests/dev_relay/test_agent_runner_shutdown.py`, 신규)
+  > - 빠른 task → timeout 안 걸림, watchdog WARNING 0건.
+  > - 느린 task (2s sleep) → `timeout=0.2` 만료 후 ~0.3초 이내 반환 + WARNING 1건.
+  > - `timeout=None` → watchdog 미등록, 정상 종료.
+  > - `wait=False` → watchdog 미등록, 즉시 반환.
+  > 
+  > 전체 회귀: `pytest -q` → 513 passed, 0 failures.
+  > 
+  > ## 수용 기준
+  > - [x] `AgentRunner.shutdown(wait=True, timeout=T)` 가 T 초 안에 반환된다 (worker task 가 더 오래 걸려도).
+  > - [x] timeout 만료 시 WARNING 로그 (`shutdown timeout exceeded`) 가 한 번 남는다.
+  > - [x] `wait=True, timeout=None` / `wait=False` 기존 호출은 회귀 없음.
+  > - [x] 호출 측 `main.py:809` 무수정.
+- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
