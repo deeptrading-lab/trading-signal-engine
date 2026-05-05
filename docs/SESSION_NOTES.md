@@ -19,6 +19,14 @@
 > - 사용자와 합의한 follow-up 표·우선순위·다음 트랙이 있을 때.
 > - 여러 PR 을 한 흐름으로 묶어 정리하고 싶을 때 (자동화로 못 잡음).
 >
+> ## 작성 방식 — 별도 PR 금지
+>
+> [HANDOFF.md](HANDOFF.md) 가 `qa-passed` 시점에 그 PR 의 feature 브랜치 자체에 자동 append 되어 별도 PR 을 만들지 않는 것과 같은 컨벤션을 따른다.
+>
+> - **세션 마지막 작업 PR 의 같은 브랜치에 append** 하고 함께 머지한다.
+> - 마지막 PR 이 이미 머지된 뒤라 추가가 늦어졌다면, 다음 세션의 첫 작업 PR 브랜치에 묻어 넣는다.
+> - 단독 SESSION_NOTES PR 은 만들지 않는다 (정책 갱신·backfill 같은 메타 작업은 예외).
+>
 > ## 작성 형식
 >
 > ```markdown
@@ -107,3 +115,39 @@
 - Issue #28 OPEN 유지 (항목 3 미완).
 - `dev-relay-agent-integration` PRD 초안은 사용자 검토 전 — 사용자 확인 후 별도 PR + `/pipeline` 진입. (본 PR 에는 미포함)
 - 이번 세션의 QA 리포트 2건 (`slack-dev-relay-audit-perm-ratelimit-test.md`, `slack-dev-relay-shutdown-watchdog.md`) 은 원래 각 PR 머지 시점에 동봉됐어야 하나 누락되어 본 PR 에 같이 포함.
+
+---
+
+## 2026-05-06 (오후) — 새 세션 status 누락 발견 + read 의무화
+
+**요약**: 동일 일자에 새 Claude 세션이 `/status` 호출 시 직전 세션의 [SESSION_NOTES](SESSION_NOTES.md) 를 무시하고 사용자 합의를 어긴 권고를 한 사례 발견. 3개 진입점에 read 의무를 명시해 회귀 차단. 동시에 누락 산출물 backfill.
+
+### 처리한 일
+
+- **PR [#39](https://github.com/deeptrading-lab/trading-signal-engine/pull/39)** — `docs/qa/handoff-session-notes.md` backfill (PR #38 머지 후 누락된 QA 리포트). merged `df657b7`.
+- **PR [#40](https://github.com/deeptrading-lab/trading-signal-engine/pull/40)** — SESSION_NOTES.md read 의무화 (`AGENTS.md` 진입 안내·문서 표·§"작업 인수인계" 섹션 + `.claude/agents/manager.md` "필수 read" 절 + `.claude/commands/status.md` 호출 프롬프트). merged `6e965d3`.
+
+### 결정·합의 사항
+
+- 회귀 원인은 SESSION_NOTES.md 도입(#38) 시점에 **read 경로를 명시 안 한 것**. 파일만 만들고 진입점 안내·서브에이전트 정의·status 스킬 어디에도 의무를 안 적었다 → 다음 세션이 못 봄.
+- 본 PR 은 manager 만 다룬다. pm/qa/reviewer/devops/dev 까지 확장은 1~2주 운영 후 평가 (PR #40 본문 "다음 작업" 명시).
+- GitHub 일시 504 로 PR #39 라벨 부여가 한동안 막힘 — 복구 후 정상 처리.
+- AGENTS.md L6 진입 안내가 모든 에이전트 일반 의무로 작동해 사각지대는 작다는 reviewer 판단.
+
+### 다음 세션 시작 포인트
+
+| 우선 | 항목 | 슬러그/이슈 | 비고 |
+|---|---|---|---|
+| 1 | shell metachar 정책 완화 | `feat/dev-relay-shell-pipe-allow` (직전 세션 P1) | 일상 사용 차단 빈도 최고 |
+| 2 | NL 분기 동시성 직렬화 | `feat/dev-relay-nl-serialize` (직전 세션 P1) | reviewer 권고, race 가능성 |
+| 3 | `dev-relay-agent-integration` 구현 | [PRD 초안](prd/dev-relay-agent-integration.md) 검토 후 `/pipeline` | Issue #28 항목 3 |
+| 4 | Issue #28 본문 strikethrough | 외부 가시 액션, 동의 후 진행 | 항목 1·2 완료, 항목 3 위임 명시 |
+| 5 | audit `user_id` 추적 누락 fix | 직전 세션 P2 | reviewer C-2 |
+| 6 | Phase 2 PRD `dev-relay-write-tools` | 직전 세션 P2 | |
+| 7 | 사용자 검증 이슈 4건 회귀 테스트화 | 직전 세션 P3 | |
+
+### 미결·블록
+
+- PRD `dev-relay-agent-integration` 사용자 검토 전 (의도된 보류) — 내일 검토 후 별도 PR.
+- Issue #28 본문 갱신은 사용자 동의 대기.
+- 본 PR 은 SESSION_NOTES append 만 다룸 (한 줄 변경).

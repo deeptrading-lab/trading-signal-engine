@@ -375,3 +375,45 @@
 - **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):
   - 다른 서브에이전트(pm/qa/reviewer/devops/backend-dev/frontend-dev/ux-designer)도 SESSION_NOTES read 가 필요한지 검토. 본 PR 은 manager 만 다룬다 — pipeline 흐름 외 직접 호출은 manager 가 진입점이므로.
   - (운영 1~2주 후) SESSION_NOTES read 의무가 실제로 새 세션 권고 품질을 끌어올렸는지 평가. 안 됐으면 hook 자동화 검토.
+
+### 2026-05-05 — docs(session-notes): 2026-05-06 오후 세션 정리 append (#41)
+
+- **slug**: `session-notes-2026-05-06-late` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/41
+- **요약**: docs(session-notes): 2026-05-06 오후 세션 정리 append
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## Summary
+  > 
+  > 오늘 오후 세션 마무리 정리 + SESSION_NOTES 작성 정책 갱신.
+  > 
+  > - SESSION_NOTES.md 에 2026-05-06 오후 항목 append (PR #39/#40 흐름 + 다음 세션 시작 포인트 7건)
+  > - **정책 갱신**: SESSION_NOTES 단독 PR 금지 — HANDOFF 자동화 컨벤션과 통일해 **세션 마지막 작업 PR 의 같은 브랜치에 append** 하고 함께 머지. 본 PR 자체는 정책 도입 메타 작업 케이스.
+  > - AGENTS.md §"작업 인수인계" 섹션에 동일 정책 명시.
+  > 
+  > ## 변경
+  > 
+  > - `docs/SESSION_NOTES.md` — 2026-05-06 오후 항목 append + 형식 가이드에 "별도 PR 금지" 절 추가
+  > - `AGENTS.md` — §"작업 인수인계" 에 SESSION_NOTES 작성 방식 정책 추가
+  > 
+  > ## Test plan
+  > 
+  > - [x] SESSION_NOTES.md 형식 가이드와 신규 항목 일관 (위 과거 / 아래 최신)
+  > - [x] AGENTS.md 정책이 SESSION_NOTES 본문 정책과 모순 없음
+  > - [ ] reviewer/QA 검증
+  > 
+  > ## 다음 작업
+  > 
+  > - 내일부터는 본 정책 적용. 세션 마지막 PR 이 정해질 때까지 SESSION_NOTES 항목 작성 보류.
+  > - PRD `dev-relay-agent-integration` 사용자 검토 후 별도 PR (다음 세션 첫 트랙).
+  > - Issue #28 본문 strikethrough (사용자 동의 후, 외부 가시 액션).
+  > - shell metachar 정책 완화 — 다음 세션 추천 1순위.
+  > 
+  > ## Refs
+  > 
+  > - 이전 세션 마무리(#38)에서 SESSION_NOTES 도입, read 의무화(#40), QA backfill(#39) 흐름.
+- **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):
+  - 내일부터는 본 정책 적용. 세션 마지막 PR 이 정해질 때까지 SESSION_NOTES 항목 작성 보류.
+  - PRD `dev-relay-agent-integration` 사용자 검토 후 별도 PR (다음 세션 첫 트랙).
+  - Issue #28 본문 strikethrough (사용자 동의 후, 외부 가시 액션).
+  - shell metachar 정책 완화 — 다음 세션 추천 1순위.

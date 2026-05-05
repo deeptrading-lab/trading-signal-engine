@@ -253,6 +253,7 @@ gh label create prd-requested prd-ready design-ready impl-wip impl-ready \
 - **다음 작업 후보 자동 추출**: PR 본문에 `## 다음 작업` (또는 `## Next steps`, `## Follow-up`, `## 후속`) 섹션을 넣으면 그 내용이 HANDOFF에 자동 채워진다. **후보일 뿐 절대적 지시가 아니다.** 다음 작업자(사람·AI 모두)는 참고만 하고 우선순위·문맥에 따라 자유롭게 결정한다.
 - **머지 전 최종 점검**: Reviewer는 PR diff에서 HANDOFF 항목을 함께 검토한다. 사실관계·다음 작업 후보가 부적절하면 PR에서 직접 수정 후 머지한다.
 - **수동 append (선택)**: PR로 묶이지 않는 메모(WIP 중단, 디버깅 발견, 후속 TODO)는 세션 끝에 직접 추가해도 된다. `### YYYY-MM-DD — [WIP] 제목` 형태로 적는다.
+- **SESSION_NOTES 작성 방식 — 별도 PR 금지**: HANDOFF 자동화와 같은 컨벤션을 따른다. **세션 마지막 작업 PR 의 같은 브랜치에 SESSION_NOTES.md 항목을 append 하고 함께 머지**한다. 마지막 PR 이 이미 머지된 뒤라 늦어졌다면, 다음 세션 첫 PR 브랜치에 묻어 넣는다. 단독 SESSION_NOTES PR 은 만들지 않는다(정책 갱신·backfill 같은 메타 작업은 예외).
 - **순서**: 위가 오래된 항목, 아래가 최신. 최근 항목은 파일 하단에서 읽는다.
 
 ---
