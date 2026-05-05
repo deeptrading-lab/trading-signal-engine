@@ -26,6 +26,7 @@ from ai.dev_relay import slack_renderer
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PRD_PATH = REPO_ROOT / "docs" / "prd" / "slack-dev-relay.md"
+PRD_NL_PATH = REPO_ROOT / "docs" / "prd" / "dev-relay-natural-language.md"
 DEV_RELAY_DIR = REPO_ROOT / "ai" / "dev_relay"
 
 
@@ -191,6 +192,16 @@ def test_prd_body_outside_code_is_clean():
     matched = find_forbidden_keywords(body)
     assert matched == [], (
         f"PRD 본문에 도메인 키워드가 노출되어 있습니다: {matched}"
+    )
+
+
+def test_prd_natural_language_body_outside_code_is_clean():
+    """자연어 분기 PRD 산문 검사 (AC-22)."""
+    text = PRD_NL_PATH.read_text(encoding="utf-8")
+    body = _strip_code_blocks(text)
+    matched = find_forbidden_keywords(body)
+    assert matched == [], (
+        f"자연어 분기 PRD 본문에 도메인 키워드가 노출되어 있습니다: {matched}"
     )
 
 

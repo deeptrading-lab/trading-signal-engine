@@ -37,6 +37,11 @@ from dotenv import find_dotenv, load_dotenv
 
 from ai.coordinator._compliance import find_forbidden_keywords
 from ai.dev_relay.agent_runner import AgentRunner
+from ai.dev_relay.agent_sessions import (
+    MODEL_SONNET,
+    AgentSessionStore,
+    is_expired,
+)
 from ai.dev_relay.auth import (
     extract_action_user_id,
     extract_sender,
@@ -47,6 +52,11 @@ from ai.dev_relay.auth import (
 )
 from ai.dev_relay.config import ConfigError, DevRelayConfig, load_config
 from ai.dev_relay.dispatcher import CommandKind, parse
+from ai.dev_relay.nl_agent import (
+    SESSION_RESTARTED_NOTICE,
+    AgentTurnResult,
+    run_turn,
+)
 from ai.dev_relay.queue import JobQueue, default_db_path
 from ai.dev_relay.slack_renderer import (
     FALLBACK_RESPONSE,
@@ -59,6 +69,7 @@ from ai.dev_relay.slack_renderer import (
     TEMPLATE_UNKNOWN_COMMAND,
     build_merge_confirm_blocks,
     build_status_text,
+    guard_text_with_urls,
 )
 
 _LOGGER_NAME = "ai.dev_relay"
@@ -146,6 +157,44 @@ def _resolve_self_user_id(app: Any, logger: logging.Logger) -> str | None:
         return None
 
 
+# 리액션 표지 (사용자 가시성 — 처리 중 / 완료 / 에러 인지용).
+# `reactions:write` 스코프가 없으면 add/remove 가 실패하지만 본문 처리는 계속 진행.
+_REACTION_PROCESSING = "eyes"
+_REACTION_DONE = "white_check_mark"
+_REACTION_ERROR = "x"
+
+
+def _set_reaction(
+    client: Any,
+    *,
+    channel: str | None,
+    ts: str | None,
+    name: str,
+    add: bool,
+    logger: logging.Logger,
+) -> None:
+    """이모지 리액션 추가/제거. 실패는 INFO 로그만 — 본문 발사 흐름 차단 금지.
+
+    `reactions:write` 스코프가 누락된 워크스페이스에서도 데몬이 죽지 않도록
+    예외를 모두 흡수한다 (스코프는 사용자가 Slack App 콘솔에서 수동 추가하는
+    선택 권장 항목).
+    """
+    if not channel or not ts:
+        return
+    try:
+        if add:
+            client.reactions_add(channel=channel, name=name, timestamp=ts)
+        else:
+            client.reactions_remove(channel=channel, name=name, timestamp=ts)
+    except Exception as exc:  # noqa: BLE001
+        # missing_scope / already_reacted / no_reaction 모두 동일하게 흡수.
+        logger.info(
+            "reaction %s 실패 (%s): scope 누락 또는 이미 처리됨",
+            "add" if add else "remove",
+            type(exc).__name__,
+        )
+
+
 def _extract_idempotency_key(event: dict) -> str | None:
     """Slack 이벤트에서 멱등성 키 추출 (PRD §3.4).
 
@@ -164,8 +213,18 @@ def _handle_command(
     logger: logging.Logger,
     queue: JobQueue,
     rate_limiter: _RateLimiter,
+    sessions: AgentSessionStore | None = None,
+    nl_runtime: Any | None = None,
 ) -> None:
-    """파싱된 명령에 따라 큐 적재 + 첫 응답 발사."""
+    """파싱된 명령에 따라 큐 적재 + 첫 응답 발사.
+
+    선행 PRD §3.3 의 정규식 fast-path (`status` / `review pr <N>` / `merge pr <N>`)
+    가 매치되면 기존 흐름 — LLM 호출 없음 (AC-1 회귀 보존).
+
+    매치되지 않은 자연어 입력은 `nl_runtime` 이 주어진 경우 NL_AGENT_LOOP 로
+    진입한다 (PRD `dev-relay-natural-language.md` §3.1). `nl_runtime` 이 None
+    이면 기존 unknown 안내로 fallback (단위 테스트·SDK 미설정 환경 호환).
+    """
     parsed = parse(text)
 
     masked = mask_user_id(user_id)
@@ -182,13 +241,26 @@ def _handle_command(
         safe_say(say, TEMPLATE_DESTRUCTIVE_BLOCKED, logger, context="destructive")
         return
 
-    # rate limit (AC-15).
+    # rate limit (AC-15) — 자연어 분기 진입 전에 적용.
     if not rate_limiter.check(user_id):
         logger.info("rate limit hit: user=%s", masked)
         safe_say(say, TEMPLATE_RATE_LIMIT, logger, context="rate_limit")
         return
 
     if parsed.kind is CommandKind.UNKNOWN:
+        # 자연어 분기 진입 (Phase 1 read-only) — runtime 이 주입된 경우에 한해.
+        # AC-1 회귀: fast-path 가 매치된 입력은 본 분기에 도달하지 않는다.
+        if sessions is not None and nl_runtime is not None:
+            _handle_natural_language(
+                text=text,
+                user_id=user_id,
+                event=event,
+                say=say,
+                logger=logger,
+                sessions=sessions,
+                nl_runtime=nl_runtime,
+            )
+            return
         safe_say(say, TEMPLATE_UNKNOWN_COMMAND, logger, context="unknown")
         return
 
@@ -284,12 +356,121 @@ def _now_kst() -> str:
     )
 
 
+def _extract_thread_ts(event: dict) -> tuple[str, str]:
+    """Slack 이벤트에서 thread_ts 와 channel id 를 안전하게 추출.
+
+    PRD §3.3: thread 답글이면 `event.thread_ts`, 신규 메시지면 `event.ts` 를
+    사용한다. channel id 는 DM 채널 식별자.
+    """
+    ts = event.get("ts") or ""
+    thread_ts = event.get("thread_ts") or ts
+    channel_id = event.get("channel") or ""
+    return thread_ts, channel_id
+
+
+def _handle_natural_language(
+    *,
+    text: str,
+    user_id: str,
+    event: dict,
+    say: Any,
+    logger: logging.Logger,
+    sessions: AgentSessionStore,
+    nl_runtime: Any,
+) -> None:
+    """자연어 분기 진입 (PRD `dev-relay-natural-language.md`).
+
+    - 스레드 = 세션 매핑 (AC-6 / AC-7).
+    - 30분 만료 후 재진입 시 안내 1라인 + 신규 세션 (AC-8).
+    - run_turn 이 메시지 리스트를 반환 — 차례로 발사 (Block Kit 분할 포함).
+    - audit 신규 kind 6종 자동 기록.
+    """
+    masked = mask_user_id(user_id)
+    thread_ts, channel_id = _extract_thread_ts(event)
+
+    # 만료 판정 + resume 결정.
+    existing = sessions.get(thread_ts=thread_ts, channel_id=channel_id)
+    resume_session_id: str | None = None
+    if existing is not None:
+        if is_expired(existing):
+            logger.info("session expired, restarting: thread_ts=%s", thread_ts)
+            # NL 분기 응답은 thread_ts 에 묶어 발사 — 사용자가 같은 스레드 답글로
+            # 후속 turn 을 보내면 session resume 가 발동된다 (PRD §3.3).
+            say(SESSION_RESTARTED_NOTICE, thread_ts=thread_ts)
+            # 만료된 세션은 신규 시작으로 간주 — resume 하지 않는다.
+            resume_session_id = None
+        else:
+            resume_session_id = existing.session_id
+
+    def _audit(record: dict) -> None:
+        _append_audit(record)
+
+    # NL_AGENT_LOOP 진입.
+    result: AgentTurnResult = run_turn(
+        user_text=text,
+        user_id_masked=masked,
+        classifier=nl_runtime["classifier"],
+        haiku_responder=nl_runtime["haiku_responder"],
+        sonnet_responder=nl_runtime["sonnet_responder"],
+        resume_session_id=resume_session_id,
+        audit=_audit,
+        now_iso=_now_kst,
+    )
+
+    # 세션 갱신: Sonnet 분기에서 session_id 반환 시 store 에 반영.
+    if result.sonnet_session_id:
+        if existing is None or is_expired(existing) or resume_session_id is None:
+            session = sessions.start(
+                thread_ts=thread_ts,
+                channel_id=channel_id,
+                session_id=result.sonnet_session_id,
+                model_used=MODEL_SONNET,
+            )
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "session_started",
+                    "thread_ts": thread_ts,
+                    "session_id": session.session_id,
+                    "model": session.model_used,
+                }
+            )
+        else:
+            session = sessions.resume(
+                thread_ts=thread_ts,
+                channel_id=channel_id,
+                model_used=MODEL_SONNET,
+            )
+            if session is not None:
+                _append_audit(
+                    {
+                        "ts": _now_kst(),
+                        "kind": "session_resumed",
+                        "thread_ts": thread_ts,
+                        "session_id": session.session_id,
+                        "turn": session.turn_count,
+                    }
+                )
+
+    # 메시지 발사 — 차례로. Sonnet 분기는 Block Kit 분할로 다중 chunk 가능.
+    # NL 분기 응답은 항상 thread_ts 에 묶어 발사 — 사용자가 후속 답글을 같은
+    # 스레드에 보내면 session resume 가 발동된다. 데몬이 thread_ts 를 안 박으면
+    # 봇 응답이 top-level DM 메시지로 발사되어 사용자가 reply-in-thread UI 를
+    # 사용할 수 없고 매 turn 이 새 세션이 된다 (PRD §3.3 의도와 어긋남).
+    for message in result.messages:
+        # 발사 직전 한 번 더 가드 (다중 layer 안전망).
+        safe = guard_text_with_urls(message)
+        say(safe, thread_ts=thread_ts)
+
+
 def build_app(
     config: DevRelayConfig,
     logger: logging.Logger,
     *,
     queue: JobQueue,
     rate_limiter: _RateLimiter,
+    sessions: AgentSessionStore | None = None,
+    nl_runtime: dict[str, Any] | None = None,
 ) -> Any:
     """slack-bolt App 을 구성.
 
@@ -324,15 +505,65 @@ def build_app(
             )
             return
         text = event.get("text") or ""
-        _handle_command(
-            text=text,
-            user_id=sender or "",
-            event=event,
-            say=say,
+        # 리액션: 사용자 가시성을 위해 :eyes: → :white_check_mark: 흐름.
+        # 실 처리에 영향 없도록 try/finally 로 감싸서 에러 시에도 :x: 표지 발사.
+        channel = event.get("channel")
+        ts = event.get("ts")
+        _set_reaction(
+            app.client,
+            channel=channel,
+            ts=ts,
+            name=_REACTION_PROCESSING,
+            add=True,
             logger=logger,
-            queue=queue,
-            rate_limiter=rate_limiter,
         )
+        try:
+            _handle_command(
+                text=text,
+                user_id=sender or "",
+                event=event,
+                say=say,
+                logger=logger,
+                queue=queue,
+                rate_limiter=rate_limiter,
+                sessions=sessions,
+                nl_runtime=nl_runtime,
+            )
+        except Exception:
+            _set_reaction(
+                app.client,
+                channel=channel,
+                ts=ts,
+                name=_REACTION_PROCESSING,
+                add=False,
+                logger=logger,
+            )
+            _set_reaction(
+                app.client,
+                channel=channel,
+                ts=ts,
+                name=_REACTION_ERROR,
+                add=True,
+                logger=logger,
+            )
+            raise
+        else:
+            _set_reaction(
+                app.client,
+                channel=channel,
+                ts=ts,
+                name=_REACTION_PROCESSING,
+                add=False,
+                logger=logger,
+            )
+            _set_reaction(
+                app.client,
+                channel=channel,
+                ts=ts,
+                name=_REACTION_DONE,
+                add=True,
+                logger=logger,
+            )
 
     @app.event("app_mention")
     def ignore_mentions(event: dict) -> None:  # noqa: ARG001
@@ -453,6 +684,42 @@ def _install_interrupt_handlers(logger: logging.Logger) -> None:
         pass
 
 
+def _build_nl_runtime(logger: logging.Logger) -> dict[str, Any] | None:
+    """SDK 자연어 분기 runtime 을 구성한다.
+
+    SDK 가 import 되지 않거나 초기화 중 예외가 발생하면 None 을 반환 — 본 함수
+    실패는 데몬 시작 자체를 막지 않는다 (자연어 분기만 비활성, fast-path 명령은
+    그대로 동작).
+    """
+    try:
+        from ai.dev_relay.nl_sdk_runtime import (
+            make_classifier,
+            make_haiku_responder,
+            make_sonnet_responder,
+        )
+    except ImportError as exc:
+        logger.warning(
+            "자연어 분기 SDK 런타임 import 실패 (%s) — 자연어 분기 비활성, fast-path 만 동작.",
+            type(exc).__name__,
+        )
+        return None
+
+    masked_user = "U***"  # 호출 시점에 user_id 가 없으므로 hook factory 가 자체 마스킹.
+
+    def _audit(record: dict[str, Any]) -> None:
+        _append_audit(record)
+
+    return {
+        "classifier": make_classifier(),
+        "haiku_responder": make_haiku_responder(),
+        "sonnet_responder": make_sonnet_responder(
+            audit_recorder=_audit,
+            user_id_masked=masked_user,
+            now_iso=_now_kst,
+        ),
+    }
+
+
 def _autoload_dotenv() -> None:
     """프로젝트 루트의 `.env` → `.env.local` 순으로 자동 로딩.
 
@@ -494,7 +761,18 @@ def run() -> int:
     rate_limiter = _RateLimiter()
     runner = AgentRunner(max_workers=1)
 
-    app = build_app(config, logger, queue=queue, rate_limiter=rate_limiter)
+    # 자연어 분기 SDK runtime 준비 (PRD `dev-relay-natural-language.md`).
+    sessions = AgentSessionStore()
+    nl_runtime = _build_nl_runtime(logger)
+
+    app = build_app(
+        config,
+        logger,
+        queue=queue,
+        rate_limiter=rate_limiter,
+        sessions=sessions,
+        nl_runtime=nl_runtime,
+    )
 
     from slack_bolt.adapter.socket_mode import SocketModeHandler
 
