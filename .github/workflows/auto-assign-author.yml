@@ -1,0 +1,26 @@
+name: Auto-assign PR author
+
+# PR 생성·재오픈 시 작성자(author) 본인을 assignee 로 자동 추가.
+# 작업자 가시성 확보용 — 모든 진입 경로(에이전트 / 메인 세션 / 웹 UI / 모바일) 를 단일 진입점으로 보장.
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  assign-author:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign PR author as assignee
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          # 멱등성: 이미 assignee 에 들어 있으면 add 명령은 no-op 처리됨.
+          gh pr edit "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --add-assignee "$PR_AUTHOR"
