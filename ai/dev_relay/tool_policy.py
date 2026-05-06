@@ -165,16 +165,27 @@ _MUTATING_GH_VERBS: frozenset[str] = frozenset(
 )
 
 # redirect / pipe-mutation 표지 — shell metacharacter.
+# 본 상수는 단일 명령 흐름의 `_looks_mutating` 1차 필터와, pipe segment 분리 후
+# segment 내부의 잔존 metachar 검사 양쪽에서 재사용된다. `|` 는 segment 분리
+# 흐름이 호출 순서로 먼저 처리하므로 상수 자체에는 그대로 남긴다.
 _FORBIDDEN_SHELL_METACHARS: tuple[str, ...] = (
     ">",  # output redirect
     ">>",
     "<",  # input redirect (테스트 격리 측면에서도 거부)
-    "|",  # pipe — read-only 명령만 통과시키기 어려우므로 보수적으로 거부
+    "|",  # pipe — segment 분리 흐름이 우선 처리. 단일 명령 흐름에선 거부.
     "&",  # background / 명령 chain
     ";",  # 명령 chain
     "`",  # command substitution
     "$(",  # command substitution
 )
+
+# `|` 외 6종 — segment 분리 후 잔존 검사용 (PRD §3.2 단계 5).
+_FORBIDDEN_NON_PIPE_METACHARS: tuple[str, ...] = tuple(
+    m for m in _FORBIDDEN_SHELL_METACHARS if m != "|"
+)
+
+# DoS / 파싱 폭발 방지 — 일상 RO 조회 체인을 모두 커버하는 보수적 상한 (PRD §3.4).
+_MAX_PIPE_SEGMENTS: int = 5
 
 
 def _looks_mutating(command: str) -> bool:
@@ -185,8 +196,19 @@ def _looks_mutating(command: str) -> bool:
     return False
 
 
-def _evaluate_bash(command: str) -> ToolDecision:
-    """`Bash` 명령어를 read-only 화이트리스트 정책으로 평가."""
+def _has_non_pipe_metachar(text: str) -> bool:
+    """segment 분리 후 잔존 검사 — `|` 외 metachar 6종 부분 문자열 검출."""
+    lowered = text.lower()
+    return any(token in lowered for token in _FORBIDDEN_NON_PIPE_METACHARS)
+
+
+def _evaluate_bash(command: str, *, depth: int = 0) -> ToolDecision:
+    """`Bash` 명령어를 read-only 화이트리스트 정책으로 평가.
+
+    `depth` 는 segment 재귀 호출 깊이 보호용 internal parameter (PRD §3.2 단계 7).
+    `|` 만 segment 분리하므로 정상 흐름에서 최대 1. depth >= 1 인 호출에서 또
+    segment 분기 진입 시 `parse_error` 로 fail-fast.
+    """
     raw = (command or "").strip()
     brief = _bash_brief(raw)
 
@@ -194,19 +216,30 @@ def _evaluate_bash(command: str) -> ToolDecision:
         return ToolDecision(allowed=False, reason="empty_command", brief=brief)
 
     # destructive 표지 (`reset --hard`, `push --force` 등) 1차 차단.
+    # PRD §3.2 단계 1 — segment 분리보다 우선. `git reset --hard | echo ok` 같은
+    # 입력은 segment 검증에 들어가기 전에 차단된다 (AC-PIPE-6).
     if is_destructive(raw):
         return ToolDecision(allowed=False, reason="destructive_command", brief=brief)
 
-    # shell metachar 가 들어간 복합 명령은 화이트리스트 회피 가능 — 거부.
-    if _looks_mutating(raw):
-        return ToolDecision(allowed=False, reason="mutating_command", brief=brief)
-
+    # PRD §3.2 단계 2 — 토큰화. shlex 오류는 parse_error.
     try:
         tokens = shlex.split(raw)
     except ValueError:
         return ToolDecision(allowed=False, reason="parse_error", brief=brief)
     if not tokens:
         return ToolDecision(allowed=False, reason="empty_command", brief=brief)
+
+    # PRD §3.2 단계 3 — `|` 토큰 검출. 1개 이상 있으면 segment 분리 흐름.
+    if "|" in tokens:
+        if depth >= 1:
+            # PRD §3.2 단계 7 — 재귀 깊이 보호 fail-fast.
+            return ToolDecision(allowed=False, reason="parse_error", brief=brief)
+        return _evaluate_pipe_segments(tokens, brief=brief)
+
+    # `|` 가 0개인 단일 명령 흐름 — 기존 동작 그대로 (회귀 0건 보장).
+    # shell metachar 가 들어간 복합 명령은 화이트리스트 회피 가능 — 거부.
+    if _looks_mutating(raw):
+        return ToolDecision(allowed=False, reason="mutating_command", brief=brief)
 
     head = tokens[0]
 
@@ -264,6 +297,62 @@ def _evaluate_bash(command: str) -> ToolDecision:
         return ToolDecision(allowed=False, reason="mutating_command", brief=brief)
 
     return ToolDecision(allowed=False, reason="not_whitelisted", brief=brief)
+
+
+def _evaluate_pipe_segments(tokens: list[str], *, brief: str) -> ToolDecision:
+    """`|` 토큰 기준 segment 분할 + 각 segment 재귀 검증 (PRD §3.2 단계 4~6).
+
+    호출 측 `_evaluate_bash` 가 `is_destructive` 1차 차단·토큰화·`|` 검출을 마친
+    상태에서 호출된다. 본 함수는 다음을 책임진다.
+
+    - segment 분할 (빈 segment → `parse_error`).
+    - segment 수 상한 검사 (`_MAX_PIPE_SEGMENTS` 초과 → `parse_error`).
+    - 각 segment 의 raw 텍스트에 `|` 외 metachar 6종 잔존 검사
+      (`mutating_command`).
+    - 각 segment 를 `_evaluate_bash(depth=1)` 로 재귀 호출. 한 segment 라도
+      거부되면 그 segment 의 reason 을 그대로 전파한다.
+    """
+    # PRD §3.2 단계 4 — segment 분할.
+    segments: list[list[str]] = []
+    current: list[str] = []
+    for tok in tokens:
+        if tok == "|":
+            if not current:
+                # leading pipe / 연속 `||` 등 빈 segment 발생.
+                return ToolDecision(
+                    allowed=False, reason="parse_error", brief=brief
+                )
+            segments.append(current)
+            current = []
+        else:
+            current.append(tok)
+    if not current:
+        # trailing pipe — 마지막 segment 가 비어 있음.
+        return ToolDecision(allowed=False, reason="parse_error", brief=brief)
+    segments.append(current)
+
+    # PRD §3.4 — segment 수 상한.
+    if len(segments) > _MAX_PIPE_SEGMENTS:
+        return ToolDecision(allowed=False, reason="parse_error", brief=brief)
+
+    # PRD §3.2 단계 5 + 6 — 각 segment 잔존 metachar 검사 + 재귀 검증.
+    for seg_tokens in segments:
+        # segment 의 raw 텍스트는 토큰을 공백으로 join 해 재구성. quoted token 의
+        # 원본 따옴표는 유실되지만, `_has_non_pipe_metachar` / `_evaluate_bash` 는
+        # 이미 토큰 단위로 검사하므로 잔존 metachar 검출에는 충분하다.
+        seg_raw = " ".join(seg_tokens)
+        if _has_non_pipe_metachar(seg_raw):
+            return ToolDecision(
+                allowed=False, reason="mutating_command", brief=brief
+            )
+        seg_decision = _evaluate_bash(seg_raw, depth=1)
+        if not seg_decision.allowed:
+            # 첫 거부 segment 의 reason 을 그대로 전파 (audit 가독성, PRD §3.3).
+            return ToolDecision(
+                allowed=False, reason=seg_decision.reason, brief=brief
+            )
+
+    return ToolDecision(allowed=True, reason=None, brief=brief)
 
 
 def _bash_brief(command: str) -> str:
