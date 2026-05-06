@@ -456,3 +456,42 @@
   > - `ai/dev_relay/slack_renderer.py` 추가: `build_action_value_v2`/`parse_action_value_v2`/`ActionPayloadV2`, 7개 신규 정적 템플릿.
   > 
 - **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
+
+### 2026-05-06 — feat(dev-relay): Bash 가드 pipe(|) 부분 허용 — segment 분리 + 재귀 검증 (#45)
+
+- **slug**: `dev-relay-shell-pipe-allow` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/45
+- **요약**: feat(dev-relay): Bash 가드 pipe(|) 부분 허용 — segment 분리 + 재귀 검증
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## Summary
+  > 
+  > NL 세션 read-only 가드(`ai/dev_relay/tool_policy.py`)에 **`|` (pipe) 부분 허용** 로직을 추가했습니다. 양쪽 segment 가 모두 read-only 화이트리스트에 들어맞을 때만 통과시키고, 다른 metachar 6종(`>`, `>>`, `<`, `&`, `;`, `` ` ``, `\$()`)은 거부 유지.
+  > 
+  > - 트리거 PRD: [docs/prd/dev-relay-shell-pipe-allow.md](docs/prd/dev-relay-shell-pipe-allow.md) (#44 머지됨)
+  > - 변경 대상: `ai/dev_relay/tool_policy.py` 단일 파일 (호출 측 변경 없음)
+  > - 신규 reason / audit kind / 외부 인터페이스 변경 **0건**
+  > 
+  > ## 수용 기준 체크리스트
+  > 
+  > - [x] **AC-PIPE-1** 양쪽 RO pipe 허용 (12건 parametrize, `TestBashPipeAllowed`)
+  > - [x] **AC-PIPE-2** 우회 시도 13종 거부 (PRD §3.5 매트릭스, `TestBashPipeBypassDenied`)
+  > - [x] **AC-PIPE-3** 기존 단일 명령 회귀 0건 (88 → 125 case 모두 pass)
+  > - [x] **AC-PIPE-4** segment 수 상한 5 — 6 segment `parse_error`, 5 segment 통과
+  > - [x] **AC-PIPE-5** 빈 segment / 토큰화 오류 (`||`, leading/trailing pipe, unclosed quote)
+  > - [x] **AC-PIPE-6** destructive 1차 차단 우선순위 (`TestBashDestructiveDenied` 보강 2건)
+  > - [x] **AC-PIPE-7** 다른 metachar 잔존 거부 (3건)
+  > - [x] **AC-PIPE-8** 컴플라이언스 정적 검사 — PRD 본문 0 hit, `test_dev_relay_source_clean` 자동 커버
+  > - [x] **AC-PIPE-9** NL hook 통합 회귀 (`TestNLPipeHookIntegration` 3건 — SDK PreToolUse 시나리오)
+  > 
+  > ## 구현 핵심
+  > 
+  > 1. `_evaluate_bash(command, *, depth=0)` — internal depth parameter 추가 (max 1, fail-fast)
+  > 2. destructive 1차 차단 → 토큰화 → `|` 검출 시 `_evaluate_pipe_segments` 분기
+  > 3. `_evaluate_pipe_segments` — 토큰 기준 분할, 빈 segment / 상한 검사, 잔존 metachar 검사, 각 segment `_evaluate_bash(depth=1)` 재귀
+  > 4. 한 segment 라도 거부되면 그 segment 의 reason 그대로 전파 (audit 가독성)
+  > 5. 모듈 상수 `_MAX_PIPE_SEGMENTS = 5` 노출
+  > 
+  > ## 우회 매트릭스 13건 통과 확인 (AC-PIPE-2)
+  > 
+- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
