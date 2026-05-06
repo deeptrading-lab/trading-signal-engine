@@ -14,6 +14,7 @@ PRD §3.5 / §3.7 / AC-16:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from ai.coordinator._compliance import assert_no_forbidden, find_forbidden_keywords
@@ -47,6 +48,37 @@ TEMPLATE_UNKNOWN_COMMAND: str = (
 )
 TEMPLATE_DESTRUCTIVE_BLOCKED: str = (
     "이 작업은 PC에 직접 들어가서 수행해 주세요. 봇은 위험 명령을 실행하지 않습니다."
+)
+
+# PRD `dev-relay-agent-integration.md` §3.1 — 머지 carve-out 안내.
+TEMPLATE_MERGE_CARVE_OUT_NOTICE: str = (
+    "이전 세션에서 진행되던 머지 1건의 결과를 확인하지 못했습니다. "
+    "PR #{pr_number} 을 직접 확인해 주세요."
+)
+
+# PRD `dev-relay-agent-integration.md` §3.2 — [상세 보기] 캐시 유실 안내.
+TEMPLATE_REVIEW_DETAIL_LOOKUP_FAILED: str = (
+    "원본 결과를 더 이상 표시할 수 없습니다. 다시 `review pr <N>` 을 실행해 주세요."
+)
+
+# PRD `dev-relay-agent-integration.md` §3.5 — 실패 분류 → 사용자 노출 메시지.
+TEMPLATE_FAIL_DESTRUCTIVE_BLOCKED: str = (
+    "이 작업은 PC에서 직접 처리해 주세요."
+)
+TEMPLATE_FAIL_SDK_TIMEOUT: str = (
+    "응답이 지연되어 작업을 중단했어요. 다시 시도해 주세요."
+)
+TEMPLATE_FAIL_GITHUB_UNAUTHORIZED: str = (
+    "PR 접근 권한이 없습니다. 토큰 권한을 확인해 주세요."
+)
+TEMPLATE_FAIL_GITHUB_UNPROCESSABLE: str = (
+    "머지 조건을 충족하지 못했습니다 (예: 충돌·체크 실패)."
+)
+TEMPLATE_FAIL_COMPLIANCE_BLOCKED: str = (
+    "응답 생성 중 오류가 발생했어요. 다시 시도해 주세요."
+)
+TEMPLATE_FAIL_UNKNOWN: str = (
+    "알 수 없는 오류로 작업을 마치지 못했어요. 잠시 후 다시 시도해 주세요."
 )
 
 
@@ -103,9 +135,10 @@ def guard_text_strict(text: str | None, *, context: str = "") -> None:
 
 
 def build_action_value(idempotency_key: str, job_id: int) -> str:
-    """Block Kit `value` 에 묶을 식별자 (replay 방지).
+    """Block Kit `value` 에 묶을 식별자 (replay 방지) — legacy 포맷.
 
     포맷: `<idempotency_key>:<job_id>`. 호출 측에서 split 해 검증한다.
+    PR 번호를 포함하는 신규 포맷은 `build_action_value_v2` 를 사용한다.
     """
     if not idempotency_key:
         raise ValueError("idempotency_key 가 비어 있습니다.")
@@ -121,6 +154,66 @@ def parse_action_value(value: str | None) -> tuple[str, int] | None:
         return key, int(raw_id)
     except ValueError:
         return None
+
+
+def build_action_value_v2(
+    *,
+    pr_number: int,
+    idempotency_key: str,
+    job_id: int,
+) -> str:
+    """Block Kit `value` 신규 포맷 (PRD `dev-relay-agent-integration.md` §3.2).
+
+    포맷: `pr=<N>;key=<idempotency_key>;job=<job_id>`.
+    `[머지 검토]` / `[승인]` / `[상세 보기]` 모든 신규 버튼이 본 포맷을 사용한다.
+
+    Slack `value` 필드 한도(2000자) 안에서 동작 — `idempotency_key` 가 Slack
+    `client_msg_id`(UUID 36자) 라 안전하다.
+    """
+    if not idempotency_key:
+        raise ValueError("idempotency_key 가 비어 있습니다.")
+    if ";" in idempotency_key or "=" in idempotency_key:
+        raise ValueError("idempotency_key 에 구분자가 포함되어 있습니다.")
+    return f"pr={int(pr_number)};key={idempotency_key};job={int(job_id)}"
+
+
+@dataclass(frozen=True, slots=True)
+class ActionPayloadV2:
+    """`build_action_value_v2` 의 파싱 결과."""
+
+    pr_number: int
+    idempotency_key: str
+    job_id: int
+
+
+def parse_action_value_v2(value: str | None) -> ActionPayloadV2 | None:
+    """`build_action_value_v2` 의 역. 형식이 다르면 None.
+
+    파싱 실패 사유는 호출 측에서 audit 에 기록하지 않는다 (단순 형식 검증 실패).
+    """
+    if not value:
+        return None
+    parts = value.split(";")
+    fields: dict[str, str] = {}
+    for part in parts:
+        if "=" not in part:
+            return None
+        key, _, val = part.partition("=")
+        fields[key] = val
+    if {"pr", "key", "job"} - set(fields):
+        return None
+    try:
+        pr_number = int(fields["pr"])
+        job_id = int(fields["job"])
+    except ValueError:
+        return None
+    if not fields["key"]:
+        return None
+    return ActionPayloadV2(
+        pr_number=pr_number,
+        idempotency_key=fields["key"],
+        job_id=job_id,
+    )
 
 
 def build_review_result_blocks(
@@ -164,7 +257,11 @@ def build_review_result_blocks(
             }
         )
 
-    action_value = build_action_value(idempotency_key, job_id)
+    action_value = build_action_value_v2(
+        pr_number=pr_number,
+        idempotency_key=idempotency_key,
+        job_id=job_id,
+    )
     blocks.append(
         {
             "type": "actions",
@@ -195,8 +292,16 @@ def build_merge_confirm_blocks(
     idempotency_key: str,
     job_id: int,
 ) -> list[dict[str, Any]]:
-    """머지 confirm 다이얼로그 (AC-5 1단계)."""
-    action_value = build_action_value(idempotency_key, job_id)
+    """머지 confirm 다이얼로그 (AC-5 1단계).
+
+    PRD `dev-relay-agent-integration.md` §3.2 / §3.3 — `[승인]` 핸들러가 PR
+    번호를 페이로드에서 직접 복원할 수 있도록 v2 포맷을 사용한다.
+    """
+    action_value = build_action_value_v2(
+        pr_number=pr_number,
+        idempotency_key=idempotency_key,
+        job_id=job_id,
+    )
     return [
         {
             "type": "section",
@@ -281,6 +386,14 @@ _STATIC_TEMPLATES: tuple[str, ...] = (
     TEMPLATE_RATE_LIMIT,
     TEMPLATE_UNKNOWN_COMMAND,
     TEMPLATE_DESTRUCTIVE_BLOCKED,
+    TEMPLATE_MERGE_CARVE_OUT_NOTICE,
+    TEMPLATE_REVIEW_DETAIL_LOOKUP_FAILED,
+    TEMPLATE_FAIL_DESTRUCTIVE_BLOCKED,
+    TEMPLATE_FAIL_SDK_TIMEOUT,
+    TEMPLATE_FAIL_GITHUB_UNAUTHORIZED,
+    TEMPLATE_FAIL_GITHUB_UNPROCESSABLE,
+    TEMPLATE_FAIL_COMPLIANCE_BLOCKED,
+    TEMPLATE_FAIL_UNKNOWN,
 )
 
 for _template in _STATIC_TEMPLATES:

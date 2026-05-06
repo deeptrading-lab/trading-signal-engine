@@ -417,3 +417,42 @@
   - PRD `dev-relay-agent-integration` 사용자 검토 후 별도 PR (다음 세션 첫 트랙).
   - Issue #28 본문 strikethrough (사용자 동의 후, 외부 가시 액션).
   - shell metachar 정책 완화 — 다음 세션 추천 1순위.
+
+### 2026-05-06 — feat(dev-relay): 에이전트 통합 — reviewer 결과·실 머지·동시성 큐 적재 (#43)
+
+- **slug**: `dev-relay-agent-integration` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/43
+- **요약**: feat(dev-relay): 에이전트 통합 — reviewer 결과·실 머지·동시성 큐 적재
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## Summary
+  > 
+  > 상위 PRD `slack-dev-relay.md` deferred 3건(AC-4 reviewer 결과 + Block Kit 버튼, AC-5 2단계 실 머지, AC-14 동시성 큐 적재) 을 reproducible 하게 통합한다. 본 PRD: docs/prd/dev-relay-agent-integration.md (#42).
+  > 
+  > ### 트리거 / 참고
+  > - 트리거 Issue: #28
+  > - 상위 PRD: docs/prd/slack-dev-relay.md
+  > - 본 PRD: docs/prd/dev-relay-agent-integration.md
+  > - 선행 PR: #25 (slack-dev-relay), #37 (AgentRunner shutdown)
+  > 
+  > ### 구현 결정 (PRD §10 표 그대로)
+  > - **Worker 루프**: 데몬 시작 시 백그라운드 thread 1개 (`JobPicker`). `JobQueue.pending` 을 1초 폴링 (`DEFAULT_POLL_INTERVAL_S`). oldest-first 1건 dequeue → `pending → running` atomic 전이 (`claim_next_pending`).
+  > - **reviewer 호출**: `AgentRunner.run_callable` 경유. `nl_sdk_runtime` 와 별도 진입점 (`_build_reviewer`). 결과는 `ReviewResult(summary, findings, detail)` — `[머지 검토]` `[상세 보기]` 버튼 발사 + `ReviewDetailCache(LRU)` 에 본문 저장. `[상세 보기]` 캐시 유실 시 `TEMPLATE_REVIEW_DETAIL_LOOKUP_FAILED` 안내 + audit `reviewer_detail_lookup_failed`.
+  > - **머지 호출**: `_perform_merge` (merger 모듈) — `AgentRunner` 우회. `gh pr merge <N> --squash --delete-branch` 고정 (PRD §10). `validate_approval` 이 화이트리스트 user_id + action_id + payload 의 idempotency_key·job_id 일치를 통과한 경우에만 호출.
+  > - **Block Kit 페이로드 v2**: `pr=<N>;key=<idempotency_key>;job=<job_id>` 신규 포맷. `[머지 검토]` `[승인]` `[취소]` `[상세 보기]` 모두 본 포맷. legacy `build_action_value`/`parse_action_value` 는 호환성 유지용으로 남김.
+  > - **destructive 가드 회귀**: `is_destructive` 가 \`gh pr merge\` 를 차단하지 않음을 회귀 테스트로 명시 (`test_merger.py::TestDispatcherDoesNotBlockGhMerge`). 기존 `git reset --hard`, `force push`, `branch -d`, `clean -fd` 차단은 그대로.
+  > - **실패 분류 5개** (`failures.py`): `destructive_blocked` / `sdk_timeout` / `github_unauthorized` / `github_unprocessable` / `compliance_blocked` + `unknown_error` fallback. 각 분류별 사용자 노출 메시지는 PRD §3.5 표 그대로 정적 템플릿 (`TEMPLATE_FAIL_*`).
+  > - **신규 audit kind 7개**: `reviewer_started`, `reviewer_done`, `reviewer_failed`, `reviewer_detail_lookup_failed`, `merge_started`, `merge_done`, `merge_failed`. 기존 `command_received`/`job_started`/`job_done` 라이프사이클과 협업.
+  > - **재시작 머지 carve-out**: `audit_recovery.find_merge_in_flight_job_ids` 가 `merge_started` 후 종결 라인 없는 job_id 를 식별. `JobQueue.recover_running_as_failed(merge_in_flight_job_ids=...)` 가 carve-out job 은 `unknown` 으로 남기고 사용자 안내 (`TEMPLATE_MERGE_CARVE_OUT_NOTICE`).
+  > - **컴플라이언스**: 신규 메시지·버튼 라벨·audit kind 명·신규 PRD 본문·신규 모듈 모두 `ai/coordinator/_compliance.py` `FORBIDDEN_KEYWORDS` 통과. `test_compliance.py` 정적 검사가 본 PRD 산출물도 커버.
+  > 
+  > ### 신규 모듈 (재사용 인프라 재구현 금지 원칙 준수)
+  > - `ai/dev_relay/worker.py` — `JobPicker`, `JobHandler` 시그니처. `AgentRunner` 그대로 사용.
+  > - `ai/dev_relay/reviewer.py` — `ReviewResult`, `ReviewDetailCache`, `truncate_findings`. SDK 호출 자체는 caller-injected.
+  > - `ai/dev_relay/merger.py` — `validate_approval`, `perform_merge`, `classify_merge_stderr`, `extract_sha`. 외부 프로세스 호출도 caller-injected.
+  > - `ai/dev_relay/failures.py` — `FailureClassification`, `classify_exception`, `classify_github_status`, `user_message_for`.
+  > - `ai/dev_relay/audit_recovery.py` — `find_merge_in_flight_job_ids`.
+  > - `ai/dev_relay/queue.py` 추가: `claim_next_pending`, `mark_unknown`, `recover_running_as_failed` 시그니처 확장 (failed/unknown 분리).
+  > - `ai/dev_relay/slack_renderer.py` 추가: `build_action_value_v2`/`parse_action_value_v2`/`ActionPayloadV2`, 7개 신규 정적 템플릿.
+  > 
+- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._

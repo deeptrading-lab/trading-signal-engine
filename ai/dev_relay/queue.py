@@ -30,9 +30,20 @@ STATUS_RUNNING = "running"
 STATUS_DONE = "done"
 STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
+# PRD `dev-relay-agent-integration.md` §3.1 — 머지 carve-out.
+# 재시작 시 `merge_started` 후 종결 라인이 없는 row 는 GitHub 측 머지 성사 여부가
+# 불확실하므로 단순 `failed` 마킹 대신 `unknown` 으로 남기고 사용자에게 안내한다.
+STATUS_UNKNOWN = "unknown"
 
 _VALID_STATUSES: frozenset[str] = frozenset(
-    {STATUS_PENDING, STATUS_RUNNING, STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED}
+    {
+        STATUS_PENDING,
+        STATUS_RUNNING,
+        STATUS_DONE,
+        STATUS_FAILED,
+        STATUS_CANCELLED,
+        STATUS_UNKNOWN,
+    }
 )
 
 # PRD §3.4 — 스키마는 변경 없이 그대로 유지.
@@ -202,6 +213,42 @@ class JobQueue:
             ).fetchone()
         return int(row["n"]) if row is not None else 0
 
+    def claim_next_pending(self) -> Job | None:
+        """oldest-first 로 `pending` job 1건을 `running` 으로 전이하며 가져온다.
+
+        PRD `dev-relay-agent-integration.md` §3.1 — 백그라운드 picker 가 호출.
+        SQLite 단일 row UPDATE 는 atomic 하므로 두 picker 가 동일 row 를
+        잡지 못하도록 `BEGIN IMMEDIATE` 트랜잭션으로 직렬화한다.
+
+        반환: 전이 완료된 Job, pending 이 없으면 None.
+        """
+        now = _now_kst_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT * FROM jobs
+                 WHERE status = ?
+                 ORDER BY datetime(created_at) ASC, id ASC
+                 LIMIT 1
+                """,
+                (STATUS_PENDING,),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return None
+            job_id = int(row["id"])
+            conn.execute(
+                """
+                UPDATE jobs
+                   SET status = ?, started_at = ?
+                 WHERE id = ? AND status = ?
+                """,
+                (STATUS_RUNNING, now, job_id, STATUS_PENDING),
+            )
+            conn.execute("COMMIT")
+        return self.get(job_id)
+
     def latest_done(self, limit: int = 1) -> list[Job]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -270,27 +317,68 @@ class JobQueue:
             )
         return self.get(job_id)
 
+    def mark_unknown(self, job_id: int, *, result_summary: str | None = None) -> Job | None:
+        """머지 carve-out 상태로 마킹.
+
+        PRD `dev-relay-agent-integration.md` §3.1 — `merge_started` 후 종결 라인이
+        없는 job 을 단순 `failed` 로 마킹하지 않고 사용자가 GitHub 에서 직접
+        확인하도록 안내하기 위한 별도 상태.
+        """
+        now = _now_kst_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE jobs
+                   SET status = ?, finished_at = ?, result_summary = ?
+                 WHERE id = ?
+                """,
+                (STATUS_UNKNOWN, now, result_summary, job_id),
+            )
+        return self.get(job_id)
+
     # ------------------------------------------------------------------
     # 재시작 복구 (PRD §3.4 — running 잔존 row 는 failed 로 마킹)
     # ------------------------------------------------------------------
     def recover_running_as_failed(
-        self, *, reason: str = "이전 세션이 끊겨 작업이 중단됐습니다."
-    ) -> list[Job]:
-        """`running` 상태로 남아 있는 job 을 모두 `failed` 로 마킹하고 반환.
+        self,
+        *,
+        reason: str = "이전 세션이 끊겨 작업이 중단됐습니다.",
+        merge_in_flight_job_ids: frozenset[int] | None = None,
+        unknown_reason: str = (
+            "이전 세션에서 진행되던 머지 1건의 결과를 확인하지 못했습니다."
+        ),
+    ) -> tuple[list[Job], list[Job]]:
+        """`running` 잔존 row 를 복구.
 
-        반환 리스트는 사용자에게 안내 메시지를 보내기 위한 호출 측 책임.
+        PRD `dev-relay-agent-integration.md` §3.1 머지 carve-out:
+        - `merge_in_flight_job_ids` 에 포함된 job 은 `unknown` 으로 마킹 (호출 측이
+          audit.jsonl 에서 `merge_started` 후 종결 라인 부재인 job_id 를 미리 추출).
+        - 그 외 running job 은 종래대로 `failed` 마킹.
+
+        반환: (failed_jobs, unknown_jobs). 사용자 안내는 호출 측 책임.
+
+        하위 호환: 기존 호출자가 단일 리스트를 기대해도 동작하도록 본 메서드는
+        새 시그니처로 바뀐 사실을 호출 측이 인지하고 사용해야 한다 (in-tree
+        유일 호출자는 `main.run`).
         """
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM jobs WHERE status = ?", (STATUS_RUNNING,)
             ).fetchall()
-        recovered: list[Job] = []
+        carve_out = merge_in_flight_job_ids or frozenset()
+        failed: list[Job] = []
+        unknown: list[Job] = []
         for row in rows:
             job = _row_to_job(row)
-            updated = self.mark_failed(job.id, result_summary=reason)
-            if updated is not None:
-                recovered.append(updated)
-        return recovered
+            if job.id in carve_out:
+                updated = self.mark_unknown(job.id, result_summary=unknown_reason)
+                if updated is not None:
+                    unknown.append(updated)
+            else:
+                updated = self.mark_failed(job.id, result_summary=reason)
+                if updated is not None:
+                    failed.append(updated)
+        return failed, unknown
 
 
 def _row_to_job(row: sqlite3.Row | None) -> Job:
