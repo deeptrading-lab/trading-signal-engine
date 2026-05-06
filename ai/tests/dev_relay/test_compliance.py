@@ -30,6 +30,9 @@ PRD_NL_PATH = REPO_ROOT / "docs" / "prd" / "dev-relay-natural-language.md"
 PRD_AGENT_INTEGRATION_PATH = (
     REPO_ROOT / "docs" / "prd" / "dev-relay-agent-integration.md"
 )
+PRD_SHELL_PIPE_ALLOW_PATH = (
+    REPO_ROOT / "docs" / "prd" / "dev-relay-shell-pipe-allow.md"
+)
 DEV_RELAY_DIR = REPO_ROOT / "ai" / "dev_relay"
 
 
@@ -224,6 +227,16 @@ def test_prd_agent_integration_body_outside_code_is_clean():
     matched = find_forbidden_keywords(body)
     assert matched == [], (
         f"에이전트 통합 PRD 본문에 도메인 키워드가 노출되어 있습니다: {matched}"
+    )
+
+
+def test_prd_shell_pipe_allow_body_outside_code_is_clean():
+    """shell pipe 부분 허용 PRD 산문 검사 (AC-PIPE-8)."""
+    text = PRD_SHELL_PIPE_ALLOW_PATH.read_text(encoding="utf-8")
+    body = _strip_code_blocks(text)
+    matched = find_forbidden_keywords(body)
+    assert matched == [], (
+        f"shell pipe 허용 PRD 본문에 도메인 키워드가 노출되어 있습니다: {matched}"
     )
 
 
