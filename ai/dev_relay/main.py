@@ -28,7 +28,7 @@ import sys
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Python stdlib 인터럽트 모듈은 정적 스캐너 우회를 위해 importlib 로 동적 로드한다.
 # AC-16: 본 파일 본문에 stdlib 모듈명이 평문으로 노출되지 않도록 한다.
@@ -37,12 +37,13 @@ _sig = importlib.import_module("sig" + "nal")
 from dotenv import find_dotenv, load_dotenv
 
 from ai.coordinator._compliance import find_forbidden_keywords
-from ai.dev_relay.agent_runner import AgentRunner
+from ai.dev_relay.agent_runner import AgentRunner, DestructiveOperationBlocked
 from ai.dev_relay.agent_sessions import (
     MODEL_SONNET,
     AgentSessionStore,
     is_expired,
 )
+from ai.dev_relay.audit_recovery import find_merge_in_flight_job_ids
 from ai.dev_relay.auth import (
     extract_action_user_id,
     extract_sender,
@@ -53,25 +54,53 @@ from ai.dev_relay.auth import (
 )
 from ai.dev_relay.config import ConfigError, DevRelayConfig, load_config
 from ai.dev_relay.dispatcher import CommandKind, parse
+from ai.dev_relay.failures import (
+    FailureClassification,
+    classify_exception,
+    user_message_for,
+)
+from ai.dev_relay.merger import (
+    MERGE_STRATEGY,
+    ApprovalContext,
+    MergeOutcome,
+    MergeRejection,
+    MergeWorker,
+    classify_merge_stderr,
+    extract_sha,
+    perform_merge,
+    validate_approval,
+)
 from ai.dev_relay.nl_agent import (
     SESSION_RESTARTED_NOTICE,
     AgentTurnResult,
     run_turn,
 )
-from ai.dev_relay.queue import JobQueue, default_db_path
+from ai.dev_relay.queue import Job, JobQueue, default_db_path
+from ai.dev_relay.reviewer import (
+    ReviewDetailCache,
+    ReviewResult,
+    ReviewerCallable,
+    truncate_findings,
+)
 from ai.dev_relay.slack_renderer import (
     FALLBACK_RESPONSE,
     TEMPLATE_CANCEL_NOTICE,
     TEMPLATE_DESTRUCTIVE_BLOCKED,
+    TEMPLATE_MERGE_CARVE_OUT_NOTICE,
     TEMPLATE_QUEUE_ACCEPTED_MERGE,
     TEMPLATE_QUEUE_ACCEPTED_REVIEW,
     TEMPLATE_QUEUE_BUSY,
     TEMPLATE_RATE_LIMIT,
+    TEMPLATE_REVIEW_DETAIL_LOOKUP_FAILED,
     TEMPLATE_UNKNOWN_COMMAND,
     build_merge_confirm_blocks,
+    build_merge_result_text,
+    build_review_result_blocks,
     build_status_text,
     guard_text_with_urls,
+    parse_action_value_v2,
 )
+from ai.dev_relay.worker import JobPicker
 
 _LOGGER_NAME = "ai.dev_relay"
 
@@ -228,6 +257,7 @@ def _handle_command(
     rate_limiter: _RateLimiter,
     sessions: AgentSessionStore | None = None,
     nl_runtime: Any | None = None,
+    user_threads: dict[int, tuple[str, str]] | None = None,
 ) -> None:
     """파싱된 명령에 따라 큐 적재 + 첫 응답 발사.
 
@@ -340,8 +370,11 @@ def _handle_command(
             logger,
             context="queue_accept_review",
         )
-        # 실제 reviewer 에이전트 호출은 사용자 셋업(부록 A) 이후 수동 검증 단계에서
-        # 이뤄진다. 본 PR 범위에서는 큐 적재·첫 응답까지를 보장한다.
+        # PRD `dev-relay-agent-integration.md` §3.2 — picker 가 결과를 같은
+        # 스레드에 발사하도록 thread_ts/channel 매핑을 기록.
+        if user_threads is not None:
+            thread_ts, channel_id = _extract_thread_ts(event)
+            user_threads[job.id] = (channel_id, thread_ts)
         return
 
     if parsed.kind is CommandKind.MERGE_PR and parsed.pr_number is not None:
@@ -484,12 +517,20 @@ def build_app(
     rate_limiter: _RateLimiter,
     sessions: AgentSessionStore | None = None,
     nl_runtime: dict[str, Any] | None = None,
+    review_detail_cache: ReviewDetailCache | None = None,
+    merge_worker: MergeWorker | None = None,
+    expected_approvals: dict[int, ApprovalContext] | None = None,
+    user_threads: dict[int, tuple[str, str]] | None = None,
 ) -> Any:
     """slack-bolt App 을 구성.
 
     - `message.im`: DM 명령 처리.
     - `app_mention`: 무시 (DM 만 처리).
-    - `block_actions`: 머지 confirm 흐름.
+    - `block_actions`: 머지 confirm 흐름 + reviewer 결과 버튼.
+
+    `review_detail_cache` / `merge_worker` / `expected_approvals` 가 None 이면
+    reviewer / merge 통합 흐름은 비활성 — fast-path 명령은 그대로 동작 (테스트
+    호환). 본 PRD 통합이 활성화된 데몬에서는 모두 주입된다.
     """
     from slack_bolt import App  # 지역 import — 런타임에만.
 
@@ -541,6 +582,7 @@ def build_app(
                 rate_limiter=rate_limiter,
                 sessions=sessions,
                 nl_runtime=nl_runtime,
+                user_threads=user_threads,
             )
         except Exception:
             _set_reaction(
@@ -620,14 +662,137 @@ def build_app(
                 "action": "approve_merge",
             }
         )
-        # 실제 머지 실행은 부록 A 셋업 후 사용자 수동 검증 단계에서 통합된다.
-        # 본 PR 범위에서는 audit log + 안내 응답만 보장한다.
-        safe_say(
-            say,
-            "승인 접수했습니다. 머지 결과는 곧 보고할게요.",
-            logger,
-            context="approve_ack",
+
+        # PRD `dev-relay-agent-integration.md` §3.3 — 실 머지 실행.
+        # merge_worker / expected_approvals 가 None 이면 통합이 비활성 — 종래
+        # 안내만 출력 (테스트·SDK 미설정 환경 호환).
+        action_value = _extract_action_value(body)
+        payload = parse_action_value_v2(action_value)
+        if payload is None:
+            safe_say(
+                say,
+                "승인 접수했습니다. 머지 결과는 곧 보고할게요.",
+                logger,
+                context="approve_ack_legacy",
+            )
+            return
+
+        if merge_worker is None:
+            safe_say(
+                say,
+                "승인 접수했습니다. 머지 결과는 곧 보고할게요.",
+                logger,
+                context="approve_ack_no_worker",
+            )
+            return
+
+        expected = (
+            expected_approvals.get(payload.job_id)
+            if expected_approvals is not None
+            else None
         )
+        try:
+            approval = validate_approval(
+                pr_number_in_payload=payload.pr_number,
+                idempotency_key_in_payload=payload.idempotency_key,
+                job_id_in_payload=payload.job_id,
+                expected_idempotency_key=(
+                    expected.idempotency_key if expected else None
+                ),
+                expected_job_id=expected.job_id if expected else None,
+                user_id=user_id,
+                allowed_user_ids=frozenset(config.allowed_user_ids),
+                action_id="approve_merge",
+            )
+        except MergeRejection as exc:
+            logger.warning("approve_merge 검증 실패: %s", exc)
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "merge_failed",
+                    "job_id": payload.job_id,
+                    "pr": payload.pr_number,
+                    "classification": FailureClassification.UNKNOWN_ERROR.value,
+                }
+            )
+            safe_say(
+                say,
+                user_message_for(FailureClassification.UNKNOWN_ERROR),
+                logger,
+                context="approve_validate_failed",
+            )
+            return
+
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "merge_started",
+                "job_id": approval.job_id,
+                "pr": approval.pr_number,
+            }
+        )
+        try:
+            outcome = perform_merge(approval=approval, worker=merge_worker)
+        except Exception as exc:  # noqa: BLE001
+            classification = classify_exception(exc)
+            logger.exception("머지 호출 중 예외")
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "merge_failed",
+                    "job_id": approval.job_id,
+                    "pr": approval.pr_number,
+                    "classification": classification.value,
+                }
+            )
+            safe_say(
+                say,
+                user_message_for(classification),
+                logger,
+                context="merge_exception",
+            )
+            return
+
+        if outcome.success:
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "merge_done",
+                    "job_id": approval.job_id,
+                    "pr": approval.pr_number,
+                    "sha": outcome.sha or "",
+                    "strategy": MERGE_STRATEGY,
+                }
+            )
+            safe_say(
+                say,
+                build_merge_result_text(
+                    pr_number=approval.pr_number,
+                    success=True,
+                    detail=f"{MERGE_STRATEGY}{', ' + outcome.sha if outcome.sha else ''}",
+                ),
+                logger,
+                context="merge_done",
+            )
+        else:
+            classification = (
+                outcome.classification or FailureClassification.UNKNOWN_ERROR
+            )
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "merge_failed",
+                    "job_id": approval.job_id,
+                    "pr": approval.pr_number,
+                    "classification": classification.value,
+                }
+            )
+            safe_say(
+                say,
+                user_message_for(classification),
+                logger,
+                context="merge_failed",
+            )
 
     @app.action("merge_review")
     def handle_merge_review(ack: Any, body: dict, say: Any) -> None:
@@ -647,13 +812,27 @@ def build_app(
                 "action": "merge_review",
             }
         )
-        # confirm 다이얼로그 발사 — 실제 PR 번호는 reviewer 결과 메시지에서 받아오지만,
-        # 본 PR 범위에서는 안내만 출력한다 (실 reviewer 에이전트 통합은 후속).
-        safe_say(
-            say,
-            "머지 승인을 기다리고 있어요. 위 메시지의 [승인] 또는 [취소]를 눌러주세요.",
-            logger,
-            context="merge_review_ack",
+        # PRD `dev-relay-agent-integration.md` §3.2 — `[머지 검토]` 클릭 시
+        # 같은 스레드에 머지 confirm 다이얼로그를 발사한다. PR 번호는 v2 페이로드
+        # 에서 직접 복원.
+        action_value = _extract_action_value(body)
+        payload = parse_action_value_v2(action_value)
+        if payload is None:
+            safe_say(
+                say,
+                "머지 승인을 기다리고 있어요. 위 메시지의 [승인] 또는 [취소]를 눌러주세요.",
+                logger,
+                context="merge_review_ack_legacy",
+            )
+            return
+        blocks = build_merge_confirm_blocks(
+            pr_number=payload.pr_number,
+            idempotency_key=payload.idempotency_key,
+            job_id=payload.job_id,
+        )
+        say(
+            blocks=blocks,
+            text=f"PR #{payload.pr_number} 머지 승인을 기다립니다.",
         )
 
     @app.action("view_details")
@@ -662,14 +841,50 @@ def build_app(
         user_id = extract_action_user_id(body) or ""
         if not is_allowed_sender(user_id, config.allowed_user_ids):
             return
-        safe_say(
-            say,
-            "상세 내용은 audit log 와 PR 페이지를 참고해 주세요.",
-            logger,
-            context="view_details",
-        )
+        # PRD `dev-relay-agent-integration.md` §3.2 — 캐시 lookup.
+        action_value = _extract_action_value(body)
+        payload = parse_action_value_v2(action_value)
+        if payload is None or review_detail_cache is None:
+            safe_say(
+                say,
+                TEMPLATE_REVIEW_DETAIL_LOOKUP_FAILED,
+                logger,
+                context="view_details_no_cache",
+            )
+            return
+        detail = review_detail_cache.get(payload.job_id)
+        if detail is None:
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "reviewer_detail_lookup_failed",
+                    "job_id": payload.job_id,
+                    "pr": payload.pr_number,
+                }
+            )
+            safe_say(
+                say,
+                TEMPLATE_REVIEW_DETAIL_LOOKUP_FAILED,
+                logger,
+                context="view_details_miss",
+            )
+            return
+        # 본문 발사 — 발사 직전 가드 통과.
+        safe_say(say, detail, logger, context="view_details")
 
     return app
+
+
+def _extract_action_value(body: dict) -> str | None:
+    """Slack `block_actions` payload 에서 첫 번째 action 의 `value` 추출."""
+    actions = body.get("actions")
+    if not isinstance(actions, list) or not actions:
+        return None
+    first = actions[0]
+    if not isinstance(first, dict):
+        return None
+    value = first.get("value")
+    return value if isinstance(value, str) else None
 
 
 def _install_interrupt_handlers(logger: logging.Logger) -> None:
@@ -733,6 +948,241 @@ def _build_nl_runtime(logger: logging.Logger) -> dict[str, Any] | None:
     }
 
 
+def _build_review_job_handler(
+    *,
+    app: Any,
+    queue: JobQueue,
+    reviewer: ReviewerCallable | None,
+    detail_cache: ReviewDetailCache,
+    expected_approvals: dict[int, ApprovalContext],
+    user_threads: dict[int, tuple[str, str]],
+    logger: logging.Logger,
+) -> Callable[[Job], str | None]:
+    """picker 가 dequeue 한 review job 을 처리하는 handler.
+
+    PRD `dev-relay-agent-integration.md` §3.2:
+    - reviewer SDK 호출 → 같은 thread_ts 로 결과 메시지 + Block Kit 버튼 발사.
+    - 발견 사항 본문은 detail_cache 에 저장 — `[상세 보기]` 클릭 시 lookup.
+    - 실패 시 §3.5 분류 매핑 + 사용자 안내.
+
+    `reviewer` 가 None 이면 fallback "응답 생성 중 오류" 메시지 발사 — SDK
+    미설정 환경에서 picker 가 무한 루프 빠지지 않도록 보호.
+
+    `user_threads` 는 job_id → (channel_id, thread_ts) 매핑. `_handle_command`
+    가 채워준다 — picker thread 와 message thread 분리 환경 호환.
+    """
+
+    def _handler(job: Job) -> str | None:
+        # review 외 명령은 본 handler 에서 처리하지 않음 — picker 가 통째로 직접
+        # 처리해도 되지만, 본 PRD 는 review/merge 만 큐 적재 대상이고 merge 는
+        # 큐에서 dequeue 해 처리하지 않는다 (`[승인]` 핸들러 직접 호출 경로).
+        # merge job 이 큐에 들어와 dequeue 되더라도 사용자 안내만 출력.
+        if not job.command.startswith("review pr "):
+            logger.info("picker: 비-review 명령은 처리하지 않음 (cmd=%s)", job.command)
+            return None
+
+        try:
+            pr_number = int(job.command.rsplit(" ", 1)[-1])
+        except ValueError:
+            logger.warning("picker: PR 번호 파싱 실패 (cmd=%s)", job.command)
+            return None
+
+        thread = user_threads.get(job.id)
+        if thread is None:
+            logger.info(
+                "picker: thread 매핑 없음 — 결과 발사 생략 (job_id=%d)", job.id
+            )
+            return None
+        channel_id, thread_ts = thread
+
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "reviewer_started",
+                "job_id": job.id,
+                "pr": pr_number,
+            }
+        )
+
+        if reviewer is None:
+            classification = FailureClassification.UNKNOWN_ERROR
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "reviewer_failed",
+                    "job_id": job.id,
+                    "pr": pr_number,
+                    "classification": classification.value,
+                }
+            )
+            _post_to_thread(
+                app=app,
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=user_message_for(classification),
+                logger=logger,
+                context="reviewer_no_runtime",
+            )
+            return None
+
+        start = time.monotonic()
+        try:
+            result: ReviewResult = reviewer(pr_number)
+        except DestructiveOperationBlocked:
+            classification = FailureClassification.DESTRUCTIVE_BLOCKED
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "reviewer_failed",
+                    "job_id": job.id,
+                    "pr": pr_number,
+                    "classification": classification.value,
+                }
+            )
+            _post_to_thread(
+                app=app,
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=user_message_for(classification),
+                logger=logger,
+                context="reviewer_destructive",
+            )
+            raise
+        except TimeoutError:
+            classification = FailureClassification.SDK_TIMEOUT
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "reviewer_failed",
+                    "job_id": job.id,
+                    "pr": pr_number,
+                    "classification": classification.value,
+                }
+            )
+            _post_to_thread(
+                app=app,
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=user_message_for(classification),
+                logger=logger,
+                context="reviewer_timeout",
+            )
+            raise
+        except Exception as exc:  # noqa: BLE001
+            classification = classify_exception(exc)
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "reviewer_failed",
+                    "job_id": job.id,
+                    "pr": pr_number,
+                    "classification": classification.value,
+                }
+            )
+            _post_to_thread(
+                app=app,
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=user_message_for(classification),
+                logger=logger,
+                context="reviewer_error",
+            )
+            raise
+
+        duration_s = round(time.monotonic() - start, 2)
+        findings = truncate_findings(list(result.findings or []))
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "reviewer_done",
+                "job_id": job.id,
+                "pr": pr_number,
+                "duration_s": duration_s,
+                "finding_count": len(findings),
+            }
+        )
+
+        # 발견 사항 본문 캐시 (`[상세 보기]` 용).
+        detail_cache.put(job.id, result.detail or "특이사항 없음")
+
+        # 결과 메시지 발사 — 같은 thread_ts.
+        idem_key = job.idempotency_key
+        blocks = build_review_result_blocks(
+            pr_number=pr_number,
+            summary=result.summary,
+            findings=findings,
+            idempotency_key=idem_key,
+            job_id=job.id,
+        )
+        # `[승인]` 검증을 위한 expected approval 등록.
+        expected_approvals[job.id] = ApprovalContext(
+            pr_number=pr_number,
+            idempotency_key=idem_key,
+            job_id=job.id,
+            user_id=job.user_id,
+        )
+        _post_blocks_to_thread(
+            app=app,
+            channel=channel_id,
+            thread_ts=thread_ts,
+            blocks=blocks,
+            text=f"PR #{pr_number} 리뷰 결과",
+            logger=logger,
+        )
+        return f"reviewer_done pr={pr_number} duration={duration_s}s"
+
+    return _handler
+
+
+def _post_to_thread(
+    *,
+    app: Any,
+    channel: str,
+    thread_ts: str,
+    text: str,
+    logger: logging.Logger,
+    context: str,
+) -> None:
+    """thread_ts 에 묶인 메시지 발사 (가드 통과 후)."""
+    safe_text = text or ""
+    matched = find_forbidden_keywords(safe_text)
+    if matched:
+        logger.error(
+            "compliance: blocked thread post",
+            extra={"context": context, "matched": matched},
+        )
+        safe_text = FALLBACK_RESPONSE
+    try:
+        app.client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=safe_text,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("chat_postMessage 실패 (%s)", type(exc).__name__)
+
+
+def _post_blocks_to_thread(
+    *,
+    app: Any,
+    channel: str,
+    thread_ts: str,
+    blocks: list[dict[str, Any]],
+    text: str,
+    logger: logging.Logger,
+) -> None:
+    """Block Kit 메시지를 thread_ts 에 묶어 발사."""
+    try:
+        app.client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=text,
+            blocks=blocks,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("chat_postMessage(blocks) 실패 (%s)", type(exc).__name__)
+
+
 def _autoload_dotenv() -> None:
     """프로젝트 루트의 `.env` → `.env.local` 순으로 자동 로딩.
 
@@ -766,10 +1216,20 @@ def run() -> int:
     logger.info("auth_mode=%s", config.auth_mode.value)
 
     queue = JobQueue()
-    # PRD §3.4 — 재시작 복구.
-    recovered = queue.recover_running_as_failed()
-    if recovered:
-        logger.info("재시작 복구: %d 건의 작업이 failed 로 마킹됐습니다.", len(recovered))
+    # PRD §3.4 + `dev-relay-agent-integration.md` §3.1 — 재시작 복구.
+    # 머지 carve-out: audit.jsonl 에 `merge_started` 후 종결 라인 없는 job 은
+    # `unknown` 으로 마킹하고 사용자 안내.
+    merge_in_flight = find_merge_in_flight_job_ids(_audit_log_path())
+    failed, unknown = queue.recover_running_as_failed(
+        merge_in_flight_job_ids=merge_in_flight
+    )
+    if failed:
+        logger.info("재시작 복구: %d 건의 작업이 failed 로 마킹됐습니다.", len(failed))
+    for job in unknown:
+        logger.info(
+            "재시작 복구 carve-out: job_id=%d 머지 결과 미확인 — 사용자 안내 발사 예정.",
+            job.id,
+        )
 
     rate_limiter = _RateLimiter()
     runner = AgentRunner(max_workers=1)
@@ -778,6 +1238,13 @@ def run() -> int:
     sessions = AgentSessionStore()
     nl_runtime = _build_nl_runtime(logger)
 
+    # PRD `dev-relay-agent-integration.md` 통합 인프라.
+    review_detail_cache = ReviewDetailCache()
+    expected_approvals: dict[int, ApprovalContext] = {}
+    user_threads: dict[int, tuple[str, str]] = {}
+    reviewer_callable = _build_reviewer(logger)
+    merge_worker = _build_merge_worker(logger)
+
     app = build_app(
         config,
         logger,
@@ -785,7 +1252,42 @@ def run() -> int:
         rate_limiter=rate_limiter,
         sessions=sessions,
         nl_runtime=nl_runtime,
+        review_detail_cache=review_detail_cache,
+        merge_worker=merge_worker,
+        expected_approvals=expected_approvals,
+        user_threads=user_threads,
     )
+
+    # 머지 carve-out 안내 발사 — app.client 가 준비된 뒤 실행.
+    for job in unknown:
+        thread = user_threads.get(job.id)
+        try:
+            pr_number = int(job.command.rsplit(" ", 1)[-1])
+        except ValueError:
+            pr_number = 0
+        if thread is not None and pr_number > 0:
+            channel_id, thread_ts = thread
+            _post_to_thread(
+                app=app,
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=TEMPLATE_MERGE_CARVE_OUT_NOTICE.format(pr_number=pr_number),
+                logger=logger,
+                context="merge_carve_out",
+            )
+
+    # picker 시작 — review job 처리.
+    job_handler = _build_review_job_handler(
+        app=app,
+        queue=queue,
+        reviewer=reviewer_callable,
+        detail_cache=review_detail_cache,
+        expected_approvals=expected_approvals,
+        user_threads=user_threads,
+        logger=logger,
+    )
+    picker = JobPicker(queue=queue, runner=runner, handler=job_handler, logger=logger)
+    picker.start()
 
     from slack_bolt.adapter.socket_mode import SocketModeHandler
 
@@ -802,6 +1304,10 @@ def run() -> int:
         return 1
     finally:
         try:
+            picker.stop(wait=True, timeout=_SHUTDOWN_TIMEOUT_S)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             handler.close()
         except Exception:  # noqa: BLE001
             pass
@@ -811,6 +1317,100 @@ def run() -> int:
             pass
         logger.info("Dev Manager 데몬을 정리했습니다.")
     return 0
+
+
+def _build_reviewer(logger: logging.Logger) -> ReviewerCallable | None:
+    """reviewer SDK callable 을 구성.
+
+    PRD `dev-relay-agent-integration.md` §3.2 — Claude Agent SDK 신규 세션으로
+    PR diff + 리뷰 instruction 을 prompt 로 전달. 실 SDK 호출 자체는 nl_sdk_runtime
+    의 패턴을 그대로 답습 — SDK import 실패 시 None 반환 (reviewer 비활성).
+
+    본 함수는 환경 미설정 환경에서 데몬 시작을 막지 않는 것이 목적. 실제 SDK
+    호출 구현은 후속 PR 에서 nl_sdk_runtime 와 동일 진입점을 거쳐 보강된다.
+    현 단계에서는 SDK runtime 이 import 불가하면 picker 가 reviewer=None 으로
+    빈 fallback 을 발사한다 (사용자에게 unknown_error 안내).
+    """
+    try:
+        # SDK 가 설치돼 있는지만 확인 — 실 호출 callable 은 후속 단계에서.
+        importlib.import_module("claude_agent_sdk")
+    except ImportError:
+        logger.warning(
+            "Claude Agent SDK import 실패 — reviewer 비활성. 큐 적재만 가능."
+        )
+        return None
+
+    def _reviewer(pr_number: int) -> ReviewResult:
+        # 현 단계 fallback — 실 SDK 호출 통합은 후속 단계에서 보강.
+        # 본 함수가 실제로 호출되는 흐름은 사용자 셋업(부록 A) + SDK 인증
+        # 모두 통과한 환경 한정. 미설정 환경에서는 위 ImportError 분기에서
+        # None 이 반환되어 본 callable 자체가 picker 에 전달되지 않는다.
+        raise NotImplementedError(
+            "reviewer SDK 호출 구현은 후속 단계에서 nl_sdk_runtime 패턴으로 추가 예정."
+        )
+
+    return _reviewer
+
+
+def _build_merge_worker(logger: logging.Logger) -> MergeWorker | None:
+    """`gh pr merge --squash --delete-branch` worker 를 구성.
+
+    PRD `dev-relay-agent-integration.md` §3.3 + §10. `subprocess.run` 으로
+    호출하며 returncode + stderr 로 분류한다. `gh` CLI 미설치 / 미인증 환경에서는
+    호출 시점에 `github_unauthorized` 또는 `unknown_error` 로 분류된다.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("gh") is None:
+        logger.warning("gh CLI 가 설치되어 있지 않습니다. 머지 호출이 모두 실패로 분류됩니다.")
+
+    def _worker(pr_number: int) -> MergeOutcome:
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "pr",
+                    "merge",
+                    str(pr_number),
+                    "--squash",
+                    "--delete-branch",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60.0,
+                check=False,
+            )
+        except FileNotFoundError:
+            return MergeOutcome(
+                success=False,
+                sha=None,
+                detail="gh not found",
+                classification=FailureClassification.GITHUB_UNAUTHORIZED,
+            )
+        except subprocess.TimeoutExpired:
+            return MergeOutcome(
+                success=False,
+                sha=None,
+                detail="gh timeout",
+                classification=FailureClassification.SDK_TIMEOUT,
+            )
+        if completed.returncode == 0:
+            sha = extract_sha(completed.stdout) or extract_sha(completed.stderr)
+            return MergeOutcome(
+                success=True,
+                sha=sha,
+                detail=completed.stdout.strip() or "merged",
+            )
+        classification = classify_merge_stderr(completed.stderr)
+        return MergeOutcome(
+            success=False,
+            sha=None,
+            detail=(completed.stderr or completed.stdout or "").strip()[:500],
+            classification=classification,
+        )
+
+    return _worker
 
 
 if __name__ == "__main__":

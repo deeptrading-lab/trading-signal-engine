@@ -27,6 +27,9 @@ from ai.dev_relay import slack_renderer
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PRD_PATH = REPO_ROOT / "docs" / "prd" / "slack-dev-relay.md"
 PRD_NL_PATH = REPO_ROOT / "docs" / "prd" / "dev-relay-natural-language.md"
+PRD_AGENT_INTEGRATION_PATH = (
+    REPO_ROOT / "docs" / "prd" / "dev-relay-agent-integration.md"
+)
 DEV_RELAY_DIR = REPO_ROOT / "ai" / "dev_relay"
 
 
@@ -67,6 +70,15 @@ _STATIC_TEMPLATES = (
     ("TEMPLATE_RATE_LIMIT", slack_renderer.TEMPLATE_RATE_LIMIT),
     ("TEMPLATE_UNKNOWN_COMMAND", slack_renderer.TEMPLATE_UNKNOWN_COMMAND),
     ("TEMPLATE_DESTRUCTIVE_BLOCKED", slack_renderer.TEMPLATE_DESTRUCTIVE_BLOCKED),
+    # PRD `dev-relay-agent-integration.md` 신규 템플릿.
+    ("TEMPLATE_MERGE_CARVE_OUT_NOTICE", slack_renderer.TEMPLATE_MERGE_CARVE_OUT_NOTICE),
+    ("TEMPLATE_REVIEW_DETAIL_LOOKUP_FAILED", slack_renderer.TEMPLATE_REVIEW_DETAIL_LOOKUP_FAILED),
+    ("TEMPLATE_FAIL_DESTRUCTIVE_BLOCKED", slack_renderer.TEMPLATE_FAIL_DESTRUCTIVE_BLOCKED),
+    ("TEMPLATE_FAIL_SDK_TIMEOUT", slack_renderer.TEMPLATE_FAIL_SDK_TIMEOUT),
+    ("TEMPLATE_FAIL_GITHUB_UNAUTHORIZED", slack_renderer.TEMPLATE_FAIL_GITHUB_UNAUTHORIZED),
+    ("TEMPLATE_FAIL_GITHUB_UNPROCESSABLE", slack_renderer.TEMPLATE_FAIL_GITHUB_UNPROCESSABLE),
+    ("TEMPLATE_FAIL_COMPLIANCE_BLOCKED", slack_renderer.TEMPLATE_FAIL_COMPLIANCE_BLOCKED),
+    ("TEMPLATE_FAIL_UNKNOWN", slack_renderer.TEMPLATE_FAIL_UNKNOWN),
 )
 
 
@@ -202,6 +214,16 @@ def test_prd_natural_language_body_outside_code_is_clean():
     matched = find_forbidden_keywords(body)
     assert matched == [], (
         f"자연어 분기 PRD 본문에 도메인 키워드가 노출되어 있습니다: {matched}"
+    )
+
+
+def test_prd_agent_integration_body_outside_code_is_clean():
+    """에이전트 통합 PRD 산문 검사 (AC-INT-8)."""
+    text = PRD_AGENT_INTEGRATION_PATH.read_text(encoding="utf-8")
+    body = _strip_code_blocks(text)
+    matched = find_forbidden_keywords(body)
+    assert matched == [], (
+        f"에이전트 통합 PRD 본문에 도메인 키워드가 노출되어 있습니다: {matched}"
     )
 
 
