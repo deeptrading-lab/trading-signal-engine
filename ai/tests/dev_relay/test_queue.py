@@ -134,10 +134,11 @@ class TestRecoverRunningAsFailed:
             command="review pr 8",
         )
         # job_b 는 pending 상태로 둔다.
-        recovered = queue.recover_running_as_failed()
-        assert len(recovered) == 1
-        assert recovered[0].id == job_a.id
-        assert recovered[0].status == STATUS_FAILED
+        failed, unknown = queue.recover_running_as_failed()
+        assert len(failed) == 1
+        assert failed[0].id == job_a.id
+        assert failed[0].status == STATUS_FAILED
+        assert unknown == []
         # pending job 은 그대로.
         assert queue.count_by_status(STATUS_PENDING) == 1
         assert queue.count_by_status(STATUS_RUNNING) == 0
@@ -154,9 +155,9 @@ class TestRecoverRunningAsFailed:
 
         # 재시작.
         second = JobQueue(db_path)
-        recovered = second.recover_running_as_failed()
-        assert len(recovered) == 1
-        assert recovered[0].id == job.id
+        failed, _unknown = second.recover_running_as_failed()
+        assert len(failed) == 1
+        assert failed[0].id == job.id
         # 같은 멱등성 키 재수신 시 새 row 가 만들어지지 않는다.
         again, created = second.enqueue(
             idempotency_key="restart-key",
