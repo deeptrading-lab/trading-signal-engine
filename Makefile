@@ -1,6 +1,7 @@
 PYTHON ?= python
+TICKER ?= AAPL
 
-.PHONY: help install daemon daemon-dev-relay daemon-coordinator test test-dev-relay test-coordinator
+.PHONY: help install daemon daemon-dev-relay daemon-coordinator signal signal-offline test test-dev-relay test-coordinator test-stock-signal
 
 help:
 	@echo "Available targets:"
@@ -8,9 +9,12 @@ help:
 	@echo "  daemon             - Alias for daemon-dev-relay (most common)"
 	@echo "  daemon-dev-relay   - Run Hayoung Dev Manager bot ($(PYTHON) -m ai.dev_relay.main)"
 	@echo "  daemon-coordinator - Run Hayoung AI Coordinator bot ($(PYTHON) -m ai.coordinator.main)"
+	@echo "  signal TICKER=XXX  - Generate a stock decision brief via free provider"
+	@echo "  signal-offline TICKER=XXX - Generate a brief with deterministic sample prices"
 	@echo "  test               - Run all pytest suites under ai/tests/"
 	@echo "  test-dev-relay     - Run dev_relay tests only"
 	@echo "  test-coordinator   - Run coordinator tests only"
+	@echo "  test-stock-signal  - Run stock signal MVP tests only"
 	@echo ""
 	@echo "Override interpreter via PYTHON=... (default: python from active venv/PATH)."
 
@@ -25,6 +29,12 @@ daemon-dev-relay:
 daemon-coordinator:
 	$(PYTHON) -m ai.coordinator.main
 
+signal:
+	$(PYTHON) -m ai.stock_signal.cli $(TICKER)
+
+signal-offline:
+	$(PYTHON) -m ai.stock_signal.cli $(TICKER) --offline
+
 test:
 	$(PYTHON) -m pytest ai/tests/ -v
 
@@ -33,3 +43,6 @@ test-dev-relay:
 
 test-coordinator:
 	$(PYTHON) -m pytest ai/tests/test_coordinator_*.py -v
+
+test-stock-signal:
+	$(PYTHON) -m pytest ai/tests/test_stock_signal.py -v
