@@ -13,6 +13,15 @@ slack-bolt>=1.18
 # PRD: docs/prd/coordinator-dotenv-autoload.md
 python-dotenv>=1.0
 
+# OpenAI Responses API SDK.
+# PRD: docs/prd/ai-signal-workbench.md
+openai>=2.36.0
+
+# FastAPI 기반 workbench API.
+# PRD: docs/prd/ai-signal-workbench.md
+fastapi>=0.115
+uvicorn[standard]>=0.32
+
 # 로컬 개발 협업 릴레이 데몬(Claude Agent SDK 호출 래퍼).
 # PRD: docs/prd/slack-dev-relay.md (§3.2)
 # PyPI 최신 안정판 0.1.72 기준. 0.1.x 마이너 시리즈 호환을 위해 하한만 고정.

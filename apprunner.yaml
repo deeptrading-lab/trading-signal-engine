@@ -1,0 +1,16 @@
+version: 1.0
+runtime: python312
+build:
+  commands:
+    build:
+      - pip install -r ai/requirements.txt
+run:
+  command: python -m ai.stock_signal.server
+  network:
+    port: 8000
+    env: PORT
+  env:
+    - name: HOST
+      value: "0.0.0.0"
+    - name: PORT
+      value: "8000"

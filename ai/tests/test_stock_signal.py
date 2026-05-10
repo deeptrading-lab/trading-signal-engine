@@ -64,12 +64,12 @@ def test_render_text_contains_required_sections():
     brief = analyze_with_bars("MSFT", _uptrend_bars(), source="test")
     text = render_text(brief)
 
-    assert "Decision Brief" in text
-    assert "Action:" in text
-    assert "Entry condition" in text
-    assert "Invalidation" in text
-    assert "Risk / Reward" in text
-    assert "This is decision-support analysis" in text
+    assert "판단 요약" in text
+    assert "판단:" in text
+    assert "진입 조건" in text
+    assert "무효 조건" in text
+    assert "위험 / 보상" in text
+    assert "투자 판단 보조 정보" in text
 
 
 def test_offline_cli_engine_uses_synthetic_source():

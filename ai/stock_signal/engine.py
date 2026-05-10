@@ -16,7 +16,7 @@ from .models import (
 from .providers import PriceProviderError, YahooChartPriceProvider, SyntheticPriceProvider
 
 
-DISCLAIMER = "This is decision-support analysis, not an automated order."
+DISCLAIMER = "이 분석은 투자 판단 보조 정보이며 자동 주문이 아닙니다."
 
 
 def analyze_ticker(
