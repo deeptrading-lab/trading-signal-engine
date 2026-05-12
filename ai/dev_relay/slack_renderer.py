@@ -56,6 +56,14 @@ TEMPLATE_MERGE_CARVE_OUT_NOTICE: str = (
     "PR #{pr_number} 을 직접 확인해 주세요."
 )
 
+# PR #43 reviewer P2-1 후속 — 데몬 재시작 후 이전 세션 페이로드 거절 안내.
+# `validate_approval` 이 `REJECTION_REASON_RESTART_NO_EXPECTED` 로 거절했을 때
+# 호출 측이 발사한다. PRD §3.3 추가 안전망 강화.
+TEMPLATE_RESTART_APPROVAL_REJECTED: str = (
+    "이전 세션의 승인 요청은 더 이상 처리할 수 없습니다. "
+    "리뷰 결과를 다시 받아 주세요."
+)
+
 # PRD `dev-relay-agent-integration.md` §3.2 — [상세 보기] 캐시 유실 안내.
 TEMPLATE_REVIEW_DETAIL_LOOKUP_FAILED: str = (
     "원본 결과를 더 이상 표시할 수 없습니다. 다시 `review pr <N>` 을 실행해 주세요."

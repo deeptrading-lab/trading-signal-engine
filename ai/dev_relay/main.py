@@ -62,6 +62,7 @@ from ai.dev_relay.failures import (
 )
 from ai.dev_relay.merger import (
     MERGE_STRATEGY,
+    REJECTION_REASON_RESTART_NO_EXPECTED,
     ApprovalContext,
     MergeOutcome,
     MergeRejection,
@@ -92,6 +93,7 @@ from ai.dev_relay.slack_renderer import (
     TEMPLATE_QUEUE_ACCEPTED_REVIEW,
     TEMPLATE_QUEUE_BUSY,
     TEMPLATE_RATE_LIMIT,
+    TEMPLATE_RESTART_APPROVAL_REJECTED,
     TEMPLATE_REVIEW_DETAIL_LOOKUP_FAILED,
     TEMPLATE_UNKNOWN_COMMAND,
     build_merge_confirm_blocks,
@@ -805,12 +807,22 @@ def build_app(
                     "user_id_masked": mask_user_id(user_id),
                 }
             )
-            safe_say(
-                say,
-                user_message_for(FailureClassification.UNKNOWN_ERROR),
-                logger,
-                context="approve_validate_failed",
-            )
+            # PR #43 reviewer P2-1: 재시작 거절 케이스는 사용자 안내를 분기.
+            # 일반 검증 실패와 달리, 사용자에게 "리뷰 재요청" 액션을 안내한다.
+            if str(exc) == REJECTION_REASON_RESTART_NO_EXPECTED:
+                safe_say(
+                    say,
+                    TEMPLATE_RESTART_APPROVAL_REJECTED,
+                    logger,
+                    context="approve_validate_restart",
+                )
+            else:
+                safe_say(
+                    say,
+                    user_message_for(FailureClassification.UNKNOWN_ERROR),
+                    logger,
+                    context="approve_validate_failed",
+                )
             return
 
         _append_audit(
@@ -1289,6 +1301,32 @@ def _post_to_thread(
         logger.warning("chat_postMessage 실패 (%s)", type(exc).__name__)
 
 
+def _collect_block_user_facing_text(blocks: Any) -> list[str]:
+    """Block Kit 트리에서 사용자 노출 가능한 텍스트 필드를 수집한다.
+
+    PR #43 reviewer P2-3 후속의 가드 보조 헬퍼. `text.text`, plain text value
+    등을 모은다. `action_id` / `block_id` / `value` 는 내부 식별자라 제외.
+    """
+    collected: list[str] = []
+
+    def _visit(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "text" and isinstance(value, str):
+                    collected.append(value)
+                elif key == "text" and isinstance(value, dict):
+                    inner = value.get("text")
+                    if isinstance(inner, str):
+                        collected.append(inner)
+                _visit(value)
+        elif isinstance(node, list):
+            for item in node:
+                _visit(item)
+
+    _visit(blocks)
+    return collected
+
+
 def _post_blocks_to_thread(
     *,
     app: Any,
@@ -1298,12 +1336,55 @@ def _post_blocks_to_thread(
     text: str,
     logger: logging.Logger,
 ) -> None:
-    """Block Kit 메시지를 thread_ts 에 묶어 발사."""
+    """Block Kit 메시지를 thread_ts 에 묶어 발사.
+
+    PR #43 reviewer P2-3 후속: `blocks` 자체의 사용자 노출 텍스트도 발사 직전
+    한 번 더 정적 가드 통과. 호출 측 (`build_review_result_blocks`) 이 이미
+    `guard_text` 통과한 정상 경로는 회귀 0. 미래에 가드 미통과 blocks 가
+    실수로 흘러들어오면 발사 차단 + text-only fallback 발사로 누설을 막는다.
+    fallback `text` 인자도 `find_forbidden_keywords` 검사 통과 후 발사한다.
+    """
+    matched_in_blocks: list[str] = []
+    for chunk in _collect_block_user_facing_text(blocks):
+        matched = find_forbidden_keywords(chunk)
+        if matched:
+            matched_in_blocks.extend(matched)
+    if matched_in_blocks:
+        logger.error(
+            "compliance: blocked thread blocks post",
+            extra={"matched": sorted(set(matched_in_blocks))},
+        )
+        # blocks 누설 차단 + text-only fallback. fallback 문구도 별도 가드.
+        safe_fallback = (
+            FALLBACK_RESPONSE
+            if not find_forbidden_keywords(FALLBACK_RESPONSE)
+            else "응답 차단됨"
+        )
+        try:
+            app.client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=safe_fallback,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "chat_postMessage(blocks fallback) 실패 (%s)", type(exc).__name__
+            )
+        return
+
+    # `text` 인자(알림용 본문) 도 마지막 한 번 더 가드.
+    safe_text = text or ""
+    if find_forbidden_keywords(safe_text):
+        logger.error(
+            "compliance: blocked thread blocks post (text fallback)",
+            extra={"reason": "text"},
+        )
+        safe_text = FALLBACK_RESPONSE
     try:
         app.client.chat_postMessage(
             channel=channel,
             thread_ts=thread_ts,
-            text=text,
+            text=safe_text,
             blocks=blocks,
         )
     except Exception as exc:  # noqa: BLE001
