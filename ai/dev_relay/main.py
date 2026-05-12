@@ -295,6 +295,7 @@ def _handle_command(
                 "ts": _now_kst(),
                 "kind": "destructive_blocked",
                 "user": masked,
+                "user_id_masked": masked,
             }
         )
         safe_say(say, TEMPLATE_DESTRUCTIVE_BLOCKED, logger, context="destructive")
@@ -360,6 +361,7 @@ def _handle_command(
             "ts": _now_kst(),
             "kind": "command_received",
             "user": masked,
+            "user_id_masked": masked,
             "cmd": parsed.normalized,
             "key": idempotency_key,
             "job_id": job.id,
@@ -558,6 +560,7 @@ def _handle_natural_language(
                         "thread_ts": thread_ts,
                         "session_id": session.session_id,
                         "model": session.model_used,
+                        "user_id_masked": masked,
                     }
                 )
             else:
@@ -574,6 +577,7 @@ def _handle_natural_language(
                             "thread_ts": thread_ts,
                             "session_id": session.session_id,
                             "turn": session.turn_count,
+                            "user_id_masked": masked,
                         }
                     )
 
@@ -722,6 +726,7 @@ def build_app(
                 "ts": _now_kst(),
                 "kind": "button_action",
                 "user": mask_user_id(user_id),
+                "user_id_masked": mask_user_id(user_id),
                 "action": "cancel_merge",
             }
         )
@@ -742,6 +747,7 @@ def build_app(
                 "ts": _now_kst(),
                 "kind": "button_action",
                 "user": mask_user_id(user_id),
+                "user_id_masked": mask_user_id(user_id),
                 "action": "approve_merge",
             }
         )
@@ -796,6 +802,7 @@ def build_app(
                     "job_id": payload.job_id,
                     "pr": payload.pr_number,
                     "classification": FailureClassification.UNKNOWN_ERROR.value,
+                    "user_id_masked": mask_user_id(user_id),
                 }
             )
             safe_say(
@@ -812,6 +819,7 @@ def build_app(
                 "kind": "merge_started",
                 "job_id": approval.job_id,
                 "pr": approval.pr_number,
+                "user_id_masked": mask_user_id(user_id),
             }
         )
         try:
@@ -826,6 +834,7 @@ def build_app(
                     "job_id": approval.job_id,
                     "pr": approval.pr_number,
                     "classification": classification.value,
+                    "user_id_masked": mask_user_id(user_id),
                 }
             )
             safe_say(
@@ -845,6 +854,7 @@ def build_app(
                     "pr": approval.pr_number,
                     "sha": outcome.sha or "",
                     "strategy": MERGE_STRATEGY,
+                    "user_id_masked": mask_user_id(user_id),
                 }
             )
             safe_say(
@@ -868,6 +878,7 @@ def build_app(
                     "job_id": approval.job_id,
                     "pr": approval.pr_number,
                     "classification": classification.value,
+                    "user_id_masked": mask_user_id(user_id),
                 }
             )
             safe_say(
@@ -892,6 +903,7 @@ def build_app(
                 "ts": _now_kst(),
                 "kind": "button_action",
                 "user": mask_user_id(user_id),
+                "user_id_masked": mask_user_id(user_id),
                 "action": "merge_review",
             }
         )
@@ -943,6 +955,7 @@ def build_app(
                     "kind": "reviewer_detail_lookup_failed",
                     "job_id": payload.job_id,
                     "pr": payload.pr_number,
+                    "user_id_masked": mask_user_id(user_id),
                 }
             )
             safe_say(
@@ -1109,6 +1122,7 @@ def _build_review_job_handler(
                 "kind": "reviewer_started",
                 "job_id": job.id,
                 "pr": pr_number,
+                "user_id_masked": mask_user_id(job.user_id),
             }
         )
 
@@ -1121,6 +1135,7 @@ def _build_review_job_handler(
                     "job_id": job.id,
                     "pr": pr_number,
                     "classification": classification.value,
+                    "user_id_masked": mask_user_id(job.user_id),
                 }
             )
             _post_to_thread(
@@ -1145,6 +1160,7 @@ def _build_review_job_handler(
                     "job_id": job.id,
                     "pr": pr_number,
                     "classification": classification.value,
+                    "user_id_masked": mask_user_id(job.user_id),
                 }
             )
             _post_to_thread(
@@ -1165,6 +1181,7 @@ def _build_review_job_handler(
                     "job_id": job.id,
                     "pr": pr_number,
                     "classification": classification.value,
+                    "user_id_masked": mask_user_id(job.user_id),
                 }
             )
             _post_to_thread(
@@ -1185,6 +1202,7 @@ def _build_review_job_handler(
                     "job_id": job.id,
                     "pr": pr_number,
                     "classification": classification.value,
+                    "user_id_masked": mask_user_id(job.user_id),
                 }
             )
             _post_to_thread(
@@ -1207,6 +1225,7 @@ def _build_review_job_handler(
                 "pr": pr_number,
                 "duration_s": duration_s,
                 "finding_count": len(findings),
+                "user_id_masked": mask_user_id(job.user_id),
             }
         )
 
