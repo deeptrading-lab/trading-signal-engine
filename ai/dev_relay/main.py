@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -110,6 +111,21 @@ _RATE_LIMIT_MAX = 3  # 4번째 시도부터 차단.
 
 # graceful shutdown — 진행 중 job 대기 timeout (AC-8).
 _SHUTDOWN_TIMEOUT_S = 30.0
+
+# PRD `dev-relay-nl-serialize.md` §3.1 — 자연어 분기 process-wide 직렬화.
+# 모듈 스코프 단일 mutex. `_handle_natural_language` 진입 직후 acquire(blocking=False)
+# 로 락 획득을 시도하고, 실패하면 즉시 거절 안내(`TEMPLATE_NL_BUSY`) 1줄 발사 + 반환.
+# `try/finally` 로 release 강제 — 미release 회귀가 발생하면 데몬의 자연어 분기 전체가
+# 영구 차단되므로 보수적으로 finally 절 필수 (§7 위험 1번).
+_nl_turn_lock: threading.Lock = threading.Lock()
+
+# PRD §3.5 — shutdown 보호. flag set 이후 새 진입은 락 획득 시도 이전에 즉시 거절.
+# 진행 중 1건은 graceful 종료 (응답 발사 + 세션 갱신 + audit 기록 완료 후 release).
+_nl_shutdown_flag: threading.Event = threading.Event()
+
+# PRD §3.2 — busy 시 사용자에게 발사할 안내 1줄. 한국어 1줄 (20~60자), 컴플라이언스 0 hit.
+# 발사 직전 `guard_text_with_urls` 이중 가드를 거친다.
+TEMPLATE_NL_BUSY: str = "지금 다른 요청을 처리 중이에요. 잠시 후 다시 보내주세요."
 
 
 def _audit_log_path() -> Path:
@@ -414,6 +430,41 @@ def _extract_thread_ts(event: dict) -> tuple[str, str]:
     return thread_ts, channel_id
 
 
+def _emit_nl_busy_notice(
+    *,
+    say: Any,
+    thread_ts: str,
+    masked: str,
+    logger: logging.Logger,
+    reason: str,
+) -> None:
+    """busy 안내 1줄 발사 + `nl_busy_rejected` audit 1줄 기록.
+
+    PRD `dev-relay-nl-serialize.md` §3.2 + §3.4. 발사 직전 `guard_text_with_urls`
+    이중 가드를 거쳐 컴플라이언스 0 hit 을 보장한다. 가드 위반이면 fallback 으로
+    무발사 + 에러 로그 (외부 노출 사고 절대 금지).
+
+    `reason` 은 로그 식별용 — audit record 에는 포함하지 않는다 (스키마 일관성).
+    """
+    safe = guard_text_with_urls(TEMPLATE_NL_BUSY)
+    if find_forbidden_keywords(safe):
+        # 다중 layer 안전망 — 정적 검사로 0 hit 을 보장하지만 회귀 방어.
+        logger.error("compliance: blocked busy notice", extra={"reason": reason})
+    else:
+        try:
+            say(safe, thread_ts=thread_ts)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("busy 안내 발사 실패 (%s)", type(exc).__name__)
+    _append_audit(
+        {
+            "ts": _now_kst(),
+            "kind": "nl_busy_rejected",
+            "thread_ts": thread_ts,
+            "user_id_masked": masked,
+        }
+    )
+
+
 def _handle_natural_language(
     *,
     text: str,
@@ -424,89 +475,119 @@ def _handle_natural_language(
     sessions: AgentSessionStore,
     nl_runtime: Any,
 ) -> None:
-    """자연어 분기 진입 (PRD `dev-relay-natural-language.md`).
+    """자연어 분기 진입 (PRD `dev-relay-natural-language.md` + `dev-relay-nl-serialize.md`).
 
     - 스레드 = 세션 매핑 (AC-6 / AC-7).
     - 30분 만료 후 재진입 시 안내 1라인 + 신규 세션 (AC-8).
     - run_turn 이 메시지 리스트를 반환 — 차례로 발사 (Block Kit 분할 포함).
     - audit 신규 kind 6종 자동 기록.
+
+    동시성 (PRD `dev-relay-nl-serialize.md` AC-NLS-1~9):
+    - 진입 직후 process-wide `_nl_turn_lock.acquire(blocking=False)`. 실패 시 즉시
+      `TEMPLATE_NL_BUSY` 1줄 발사 + `nl_busy_rejected` audit 1줄 + 반환. SDK 호출
+      0건. (큐 적재 없음 — 사용자가 잠시 후 재전송.)
+    - shutdown flag set 이후 새 진입은 락 획득 시도 이전에 즉시 거절. 진행 중 1건은
+      graceful 종료 (`try/finally` 로 release 강제).
+    - structured 분기와는 별도 락. 두 분기 동시 진행 가능 (§3.3).
     """
     masked = mask_user_id(user_id)
     thread_ts, channel_id = _extract_thread_ts(event)
 
-    # 만료 판정 + resume 결정.
-    existing = sessions.get(thread_ts=thread_ts, channel_id=channel_id)
-    resume_session_id: str | None = None
-    if existing is not None:
-        if is_expired(existing):
-            logger.info("session expired, restarting: thread_ts=%s", thread_ts)
-            # NL 분기 응답은 thread_ts 에 묶어 발사 — 사용자가 같은 스레드 답글로
-            # 후속 turn 을 보내면 session resume 가 발동된다 (PRD §3.3).
-            say(SESSION_RESTARTED_NOTICE, thread_ts=thread_ts)
-            # 만료된 세션은 신규 시작으로 간주 — resume 하지 않는다.
-            resume_session_id = None
-        else:
-            resume_session_id = existing.session_id
+    # PRD §3.5 — shutdown flag 가 set 된 이후 새 진입은 락 획득 시도 이전에 즉시 거절.
+    if _nl_shutdown_flag.is_set():
+        logger.info("nl: shutdown in progress, rejecting new entry: thread_ts=%s", thread_ts)
+        _emit_nl_busy_notice(
+            say=say, thread_ts=thread_ts, masked=masked, logger=logger, reason="shutdown",
+        )
+        return
 
-    def _audit(record: dict) -> None:
-        _append_audit(record)
+    # PRD §3.1 — process-wide 단일 mutex. blocking=False 로 즉시 거절 정책.
+    acquired = _nl_turn_lock.acquire(blocking=False)
+    if not acquired:
+        logger.info("nl: another turn in progress, rejecting: thread_ts=%s", thread_ts)
+        _emit_nl_busy_notice(
+            say=say, thread_ts=thread_ts, masked=masked, logger=logger, reason="busy",
+        )
+        return
 
-    # NL_AGENT_LOOP 진입.
-    result: AgentTurnResult = run_turn(
-        user_text=text,
-        user_id_masked=masked,
-        classifier=nl_runtime["classifier"],
-        haiku_responder=nl_runtime["haiku_responder"],
-        sonnet_responder=nl_runtime["sonnet_responder"],
-        resume_session_id=resume_session_id,
-        audit=_audit,
-        now_iso=_now_kst,
-    )
+    try:
+        # 만료 판정 + resume 결정.
+        existing = sessions.get(thread_ts=thread_ts, channel_id=channel_id)
+        resume_session_id: str | None = None
+        if existing is not None:
+            if is_expired(existing):
+                logger.info("session expired, restarting: thread_ts=%s", thread_ts)
+                # NL 분기 응답은 thread_ts 에 묶어 발사 — 사용자가 같은 스레드 답글로
+                # 후속 turn 을 보내면 session resume 가 발동된다 (PRD §3.3).
+                say(SESSION_RESTARTED_NOTICE, thread_ts=thread_ts)
+                # 만료된 세션은 신규 시작으로 간주 — resume 하지 않는다.
+                resume_session_id = None
+            else:
+                resume_session_id = existing.session_id
 
-    # 세션 갱신: Sonnet 분기에서 session_id 반환 시 store 에 반영.
-    if result.sonnet_session_id:
-        if existing is None or is_expired(existing) or resume_session_id is None:
-            session = sessions.start(
-                thread_ts=thread_ts,
-                channel_id=channel_id,
-                session_id=result.sonnet_session_id,
-                model_used=MODEL_SONNET,
-            )
-            _append_audit(
-                {
-                    "ts": _now_kst(),
-                    "kind": "session_started",
-                    "thread_ts": thread_ts,
-                    "session_id": session.session_id,
-                    "model": session.model_used,
-                }
-            )
-        else:
-            session = sessions.resume(
-                thread_ts=thread_ts,
-                channel_id=channel_id,
-                model_used=MODEL_SONNET,
-            )
-            if session is not None:
+        def _audit(record: dict) -> None:
+            _append_audit(record)
+
+        # NL_AGENT_LOOP 진입.
+        result: AgentTurnResult = run_turn(
+            user_text=text,
+            user_id_masked=masked,
+            classifier=nl_runtime["classifier"],
+            haiku_responder=nl_runtime["haiku_responder"],
+            sonnet_responder=nl_runtime["sonnet_responder"],
+            resume_session_id=resume_session_id,
+            audit=_audit,
+            now_iso=_now_kst,
+        )
+
+        # 세션 갱신: Sonnet 분기에서 session_id 반환 시 store 에 반영.
+        if result.sonnet_session_id:
+            if existing is None or is_expired(existing) or resume_session_id is None:
+                session = sessions.start(
+                    thread_ts=thread_ts,
+                    channel_id=channel_id,
+                    session_id=result.sonnet_session_id,
+                    model_used=MODEL_SONNET,
+                )
                 _append_audit(
                     {
                         "ts": _now_kst(),
-                        "kind": "session_resumed",
+                        "kind": "session_started",
                         "thread_ts": thread_ts,
                         "session_id": session.session_id,
-                        "turn": session.turn_count,
+                        "model": session.model_used,
                     }
                 )
+            else:
+                session = sessions.resume(
+                    thread_ts=thread_ts,
+                    channel_id=channel_id,
+                    model_used=MODEL_SONNET,
+                )
+                if session is not None:
+                    _append_audit(
+                        {
+                            "ts": _now_kst(),
+                            "kind": "session_resumed",
+                            "thread_ts": thread_ts,
+                            "session_id": session.session_id,
+                            "turn": session.turn_count,
+                        }
+                    )
 
-    # 메시지 발사 — 차례로. Sonnet 분기는 Block Kit 분할로 다중 chunk 가능.
-    # NL 분기 응답은 항상 thread_ts 에 묶어 발사 — 사용자가 후속 답글을 같은
-    # 스레드에 보내면 session resume 가 발동된다. 데몬이 thread_ts 를 안 박으면
-    # 봇 응답이 top-level DM 메시지로 발사되어 사용자가 reply-in-thread UI 를
-    # 사용할 수 없고 매 turn 이 새 세션이 된다 (PRD §3.3 의도와 어긋남).
-    for message in result.messages:
-        # 발사 직전 한 번 더 가드 (다중 layer 안전망).
-        safe = guard_text_with_urls(message)
-        say(safe, thread_ts=thread_ts)
+        # 메시지 발사 — 차례로. Sonnet 분기는 Block Kit 분할로 다중 chunk 가능.
+        # NL 분기 응답은 항상 thread_ts 에 묶어 발사 — 사용자가 후속 답글을 같은
+        # 스레드에 보내면 session resume 가 발동된다. 데몬이 thread_ts 를 안 박으면
+        # 봇 응답이 top-level DM 메시지로 발사되어 사용자가 reply-in-thread UI 를
+        # 사용할 수 없고 매 turn 이 새 세션이 된다 (PRD §3.3 의도와 어긋남).
+        for message in result.messages:
+            # 발사 직전 한 번 더 가드 (다중 layer 안전망).
+            safe = guard_text_with_urls(message)
+            say(safe, thread_ts=thread_ts)
+    finally:
+        # PRD §3.1 + §7 위험 1번 — 정상/예외 모두 락 release 강제.
+        # 미release 회귀가 발생하면 데몬의 NL 분기 전체가 영구 차단된다.
+        _nl_turn_lock.release()
 
 
 def build_app(

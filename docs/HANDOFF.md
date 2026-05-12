@@ -495,3 +495,44 @@
   > ## 우회 매트릭스 13건 통과 확인 (AC-PIPE-2)
   > 
 - **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
+
+### 2026-05-12 — feat(dev-relay): NL 분기 process-wide 직렬화 — threading.Lock 단일 인스턴스 (#48)
+
+- **slug**: `dev-relay-nl-serialize-impl` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/48
+- **요약**: feat(dev-relay): NL 분기 process-wide 직렬화 — threading.Lock 단일 인스턴스
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 개요
+  > 
+  > PRD [`docs/prd/dev-relay-nl-serialize.md`](../blob/main/docs/prd/dev-relay-nl-serialize.md) (#46) 의 옵션 C — process-wide 단일 mutex 직렬화 — 구현.
+  > 
+  > `_handle_natural_language` 진입 직후 모듈 스코프 `threading.Lock` 을 `acquire(blocking=False)` 로 시도. 실패 시 즉시 안내 1줄 발사 + 거절 + `nl_busy_rejected` audit 1줄 기록. `try/finally` 로 release 강제.
+  > 
+  > ## 변경 파일
+  > 
+  > - `ai/dev_relay/main.py` (+145 / -64) — 모듈 스코프 락·flag·busy 안내 상수, `_emit_nl_busy_notice` 헬퍼, `_handle_natural_language` 가드 블록.
+  > - `ai/tests/dev_relay/test_handle_command_nl_serialize.py` (신규 +414) — AC-NLS-1~6, 9 + 예외 시 락 release 단위 테스트 9건.
+  > - `docs/SESSION_NOTES.md` (+46) — 2026-05-07 세션 entry 동봉 (정책: 단독 SESSION_NOTES PR 금지).
+  > 
+  > ## 수용 기준 매핑
+  > 
+  > | AC | 시나리오 | 테스트 |
+  > |---|---|---|
+  > | AC-NLS-1 | 같은 thread_ts 동시 두 NL — 두 번째 거절, SDK 1건 | `TestNLSerializeSameThread::test_concurrent_same_thread_second_rejected` |
+  > | AC-NLS-2 | 다른 thread_ts 동시 두 NL — 두 번째 거절 (process-wide) | `TestNLSerializeDifferentThread::test_concurrent_different_thread_second_rejected` |
+  > | AC-NLS-3 | turn 종료 후 재진입 정상 처리 | `TestNLSerializeSequential::test_sequential_second_call_succeeds` |
+  > | AC-NLS-4 | structured 진행 중 NL — 차단되지 않음 (별도 락) | `TestNLSerializeStructuredCoexist::test_structured_in_flight_does_not_block_nl` |
+  > | AC-NLS-5 | rate_limiter 우선 발동 — busy 미발사 | `TestNLSerializeRateLimitInterop::test_rate_limit_fires_first_no_busy` |
+  > | AC-NLS-6 | audit `nl_busy_rejected` 1줄 + 필드 정확히 4개 | `TestNLSerializeAudit::test_busy_audit_record_fields_exact` |
+  > | AC-NLS-7 | 컴플라이언스 정적 검사 0 hit | `test_compliance.py` (변경 없음, main.py 자동 커버) |
+  > | AC-NLS-8 | 기존 NL + structured 테스트 0 fail | `pytest ai/tests/dev_relay/` 489 passed |
+  > | AC-NLS-9 | shutdown — 진행 중 graceful, 새 진입 거절 | `TestNLSerializeShutdown` 2건 |
+  > | §7 위험1 | 예외 발생 시 락 release | `TestNLSerializeLockReleaseOnException::test_lock_released_when_sonnet_raises` |
+  > 
+  > ## 테스트 결과
+  > 
+  > ```
+- **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):
+  - 머지 후 1~2주 `nl_busy_rejected` 발생 빈도 모니터링 (PRD §6.3 / SESSION_NOTES follow-up 7번).
+  - 빈도가 높으면 옵션 A (`JobQueue` 통합) 또는 옵션 B (thread_ts 별 lock map) 재설계 — 후속 PRD.
