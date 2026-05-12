@@ -449,6 +449,8 @@ def _emit_nl_busy_notice(
     safe = guard_text_with_urls(TEMPLATE_NL_BUSY)
     if find_forbidden_keywords(safe):
         # 다중 layer 안전망 — 정적 검사로 0 hit 을 보장하지만 회귀 방어.
+        # 정책: 가드 위반 시 사용자 무발사 (audit 만 기록) — 컴플라이언스 우선,
+        # 외부 노출 사고 차단이 사용자 안내 손실보다 우선한다 (PR #48 reviewer P2-1).
         logger.error("compliance: blocked busy notice", extra={"reason": reason})
     else:
         try:
@@ -993,6 +995,31 @@ def _install_interrupt_handlers(logger: logging.Logger) -> None:
         pass
 
 
+def shutdown_dev_relay(
+    runner: AgentRunner,
+    *,
+    timeout: float | None = _SHUTDOWN_TIMEOUT_S,
+    logger: logging.Logger | None = None,
+) -> None:
+    """데몬 shutdown 진입점 — NL flag set + AgentRunner.shutdown 위임.
+
+    PRD `dev-relay-nl-serialize.md` §3.5 + PR #48 reviewer P2-2 후속.
+
+    호출 순서:
+    1. `_nl_shutdown_flag.set()` — 신규 NL 진입 거절 (락 acquire 시도 이전).
+       진행 중 1건은 `try/finally` 로 graceful 종료.
+    2. `runner.shutdown(wait=True, timeout=timeout)` — worker 큐 graceful 종료.
+
+    flag set 은 idempotent (`threading.Event.set` 자체가 이미 set 상태면 no-op)
+    이라 다중 호출 안전. 본 함수는 `run()` 의 finally 절에서 호출되며 직접 호출도
+    가능 (`AgentRunner.shutdown` 시그니처는 그대로 유지 — 외부 호출 측 회귀 0).
+    """
+    _nl_shutdown_flag.set()
+    if logger is not None:
+        logger.info("NL 분기 shutdown flag set — 신규 진입 거절 시작.")
+    runner.shutdown(wait=True, timeout=timeout)
+
+
 def _build_nl_runtime(logger: logging.Logger) -> dict[str, Any] | None:
     """SDK 자연어 분기 runtime 을 구성한다.
 
@@ -1393,7 +1420,8 @@ def run() -> int:
         except Exception:  # noqa: BLE001
             pass
         try:
-            runner.shutdown(wait=True, timeout=_SHUTDOWN_TIMEOUT_S)
+            # PR #48 reviewer P2-2 후속 — NL flag set + AgentRunner.shutdown 통합.
+            shutdown_dev_relay(runner, timeout=_SHUTDOWN_TIMEOUT_S, logger=logger)
         except Exception:  # noqa: BLE001
             pass
         logger.info("Dev Manager 데몬을 정리했습니다.")
