@@ -616,3 +616,42 @@
   > | pass-through | L531, L1046 | NL agent / SDK hook callback | record 변수 경유 — `nl_agent.py` / `nl_sdk_runtime.py` 소관, 본 PR 범위 외 |
   > 
 - **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
+
+### 2026-05-12 — chore(dev-relay): PR #43 reviewer P2-1·P2-3 후속 — validate_approval 재시작 거절 + blocks 가드 (#51)
+
+- **slug**: `dev-relay-approval-guard-blocks` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/51
+- **요약**: chore(dev-relay): PR #43 reviewer P2-1·P2-3 후속 — validate_approval 재시작 거절 + blocks 가드
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 배경
+  > 
+  > PR #43 (`dev-relay-agent-integration`, merged `213ed69`) reviewer P2 후속 메모 3건 중 **P2-1 + P2-3 두 건**을 묶어 처리한다. P2-2 (reviewer NotImplementedError fallback) 는 reviewer wire 자체가 별도 큰 작업이라 본 PR 비범위.
+  > 
+  > [PR #43 review comment 인용](https://github.com/deeptrading-lab/trading-signal-engine/pull/43#issuecomment-4389053077):
+  > 
+  > ### P2-1 — `validate_approval(expected=None)` 재시작 후 fallback 약화
+  > 
+  > `ai/dev_relay/merger.py:83-89` 가 `expected_idempotency_key` / `expected_job_id` 가 `None` 이면 mismatch 검사를 skip 했음. 데몬 재시작 후 기존 reviewer 결과 메시지의 `[승인]` 클릭 시 `expected_approvals` 가 비어 `None` 으로 떨어져 idempotency_key backstop 을 통과시킬 수 없는 문제.
+  > 
+  > ### P2-3 — `_post_blocks_to_thread` 의 blocks 자체 정적 가드 미적용
+  > 
+  > `ai/dev_relay/main.py:1292` `_post_blocks_to_thread` 는 `text` 인자만 가드, `blocks` 의 부분 텍스트는 호출 측 (`build_review_result_blocks`) 의 `guard_text` 통과를 신뢰. 현 호출 경로상 안전하나, 미래 회귀 차단.
+  > 
+  > ## 채택 옵션 (a) 근거
+  > 
+  > - **P2-1 옵션 (a)**: `validate_approval` 내부에서 `expected_*` 가 None 이면 즉시 거절. 단일 정의 지점이라 회귀 안전, 호출 경로 1곳뿐.
+  >   - 호출 측 (`handle_approve_merge`) 에서 `MergeRejection` 메시지를 새 reason 상수 `REJECTION_REASON_RESTART_NO_EXPECTED` 와 비교해 사용자 안내를 분기 (`TEMPLATE_RESTART_APPROVAL_REJECTED`).
+  > - **P2-3 fallback 정책**: blocks 누설 발견 시 발사 차단 + text-only fallback (`FALLBACK_RESPONSE`) 1건 발사. `text` 인자도 마지막에 한 번 더 가드.
+  > 
+  > ## 변경 파일
+  > 
+  > - `ai/dev_relay/merger.py` — `validate_approval` 재시작 거절 로직 + `REJECTION_REASON_RESTART_NO_EXPECTED` 상수 추가
+  > - `ai/dev_relay/slack_renderer.py` — `TEMPLATE_RESTART_APPROVAL_REJECTED` 신규 (한국어 1줄, 컴플라이언스 0 hit)
+  > - `ai/dev_relay/main.py` — `handle_approve_merge` 의 분기 안내 + `_post_blocks_to_thread` blocks 정적 가드 + `_collect_block_user_facing_text` 헬퍼
+  > - `ai/tests/dev_relay/test_merger.py` — 기존 relaxed 테스트를 P2-1 거절 케이스로 전환 + 한 쪽만 None 도 거절 확인 2건 추가
+  > - `ai/tests/dev_relay/test_post_blocks_guard.py` (신규) — walker 단위 + blocks/text 가드 발사 차단 케이스 + 재시작 거절 통합 점검 (10 cases)
+  > - `ai/tests/dev_relay/test_compliance.py` — 신규 템플릿 정적 검사 등록
+  > 
+  > ## 테스트 결과
+- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
