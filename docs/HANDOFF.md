@@ -577,3 +577,42 @@
 - **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):
   - (없음 — 본 PR 머지 후 PR #48 reviewer P2-1·P2-2 종결)
   - 별도 트랙은 SESSION_NOTES 2026-05-13 entry follow-up 표 참조 (A-3/A-4/A-5/B-1/B-2/C-1/C-2/C-3)
+
+### 2026-05-12 — chore(dev-relay): audit record 에 user_id_masked 누락 fix (#50)
+
+- **slug**: `dev-relay-audit-user-id` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/50
+- **요약**: chore(dev-relay): audit record 에 user_id_masked 누락 fix
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 배경
+  > 
+  > `ai/dev_relay/main.py` 의 `_append_audit` 호출 22 inline 블록 중 일부 audit kind 에 `user_id_masked` 필드가 누락되어 있어 audit 로그에서 사용자별 추적이 끊김. PR #25 reviewer Concern 후속으로 SESSION_NOTES.md follow-up 표 P2 항목에 4 세션 이월된 상태였음.
+  > 
+  > ## 식별 결과 (`_append_audit` inline 호출 분포)
+  > 
+  > | # | 위치 | kind | 사전 상태 |
+  > |---|------|------|-----------|
+  > | 1 | L293 | `destructive_blocked` | `"user"` 만 존재 → **fix** |
+  > | 2 | L359 | `command_received` | `"user"` 만 존재 → **fix** |
+  > | 3 | L460 | `nl_busy_rejected` | `user_id_masked` 이미 존재 (테스트 보장) |
+  > | 4 | L555 | `session_started` | 누락 → **fix** |
+  > | 5 | L571 | `session_resumed` | 누락 → **fix** |
+  > | 6 | L721 | `button_action`/cancel_merge | `"user"` 만 존재 → **fix** |
+  > | 7 | L741 | `button_action`/approve_merge | `"user"` 만 존재 → **fix** |
+  > | 8 | L793 | `merge_failed` (validate) | 누락 → **fix** |
+  > | 9 | L810 | `merge_started` | 누락 → **fix** |
+  > | 10 | L823 | `merge_failed` (exception) | 누락 → **fix** |
+  > | 11 | L841 | `merge_done` | 누락 → **fix** |
+  > | 12 | L865 | `merge_failed` (outcome) | 누락 → **fix** |
+  > | 13 | L891 | `button_action`/merge_review | `"user"` 만 존재 → **fix** |
+  > | 14 | L941 | `reviewer_detail_lookup_failed` | 누락 → **fix** |
+  > | 15 | L1107 | `reviewer_started` | 누락 → **fix** (picker 컨텍스트에 `job.user_id` 사용) |
+  > | 16 | L1118 | `reviewer_failed` (no runtime) | 누락 → **fix** |
+  > | 17 | L1142 | `reviewer_failed` (destructive) | 누락 → **fix** |
+  > | 18 | L1162 | `reviewer_failed` (timeout) | 누락 → **fix** |
+  > | 19 | L1182 | `reviewer_failed` (exception) | 누락 → **fix** |
+  > | 20 | L1203 | `reviewer_done` | 누락 → **fix** |
+  > | pass-through | L531, L1046 | NL agent / SDK hook callback | record 변수 경유 — `nl_agent.py` / `nl_sdk_runtime.py` 소관, 본 PR 범위 외 |
+  > 
+- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
