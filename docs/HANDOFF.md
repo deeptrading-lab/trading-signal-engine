@@ -536,3 +536,44 @@
 - **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):
   - 머지 후 1~2주 `nl_busy_rejected` 발생 빈도 모니터링 (PRD §6.3 / SESSION_NOTES follow-up 7번).
   - 빈도가 높으면 옵션 A (`JobQueue` 통합) 또는 옵션 B (thread_ts 별 lock map) 재설계 — 후속 PRD.
+
+### 2026-05-12 — chore(dev-relay): NL shutdown flag wire — PR #48 reviewer P2 후속 (#49)
+
+- **slug**: `dev-relay-nl-shutdown-wire` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/49
+- **요약**: chore(dev-relay): NL shutdown flag wire — PR #48 reviewer P2 후속
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 배경
+  > 
+  > PR #48 (`dev-relay-nl-serialize` impl, commit `40efb0c`) 머지 직후 reviewer 가 남긴 P2 후속 메모 2건을 본 chore PR 로 처리. 자가 self-review 한계는 비범위 (별도 운영자 트랙).
+  > 
+  > reviewer 코멘트 원문:
+  > - **P2-1**: `_emit_nl_busy_notice` 가드 위반 fallback 시 audit 만 기록되고 사용자 무발사 — 의도된 안전망 (외부 노출 사고 우선 차단). 운영 모니터링에서 `compliance: blocked busy notice` 에러 로그 빈도 추적 권장.
+  > - **P2-2**: `_nl_shutdown_flag.set()` 호출 측 미통합 — `AgentRunner.shutdown` 와 묶는 후속 PR 필요.
+  > 
+  > ## 변경 사항
+  > 
+  > ### P2-2 본체 — NL shutdown wire (옵션 b 채택)
+  > 
+  > `ai/dev_relay/main.py` 에 통합 헬퍼 추가:
+  > 
+  > ```python
+  > def shutdown_dev_relay(runner, *, timeout, logger=None):
+  >     _nl_shutdown_flag.set()
+  >     if logger is not None:
+  >         logger.info("NL 분기 shutdown flag set — 신규 진입 거절 시작.")
+  >     runner.shutdown(wait=True, timeout=timeout)
+  > ```
+  > 
+  > `run()` 의 `finally` 절에서 기존 `runner.shutdown(...)` 직접 호출을 본 헬퍼로 단일화. 외부 시그니처 (`AgentRunner.shutdown`) 는 그대로 유지 — 회귀 0.
+  > 
+  > **옵션 비교**:
+  > - (a) `AgentRunner.shutdown` 내부에서 `_nl_shutdown_flag.set()` — 모듈 전역 의존 도입, 책임 분리 위반 → 거절
+  > - (b) 통합 헬퍼 `shutdown_dev_relay` (채택) — AgentRunner 책임 분리 유지 + NL flag set + 후속 정리를 같은 모듈에서 묶음
+  > - (c) OS SIGTERM/SIGINT 핸들러에서 둘 다 호출 — lifecycle 분기점이 늘어남, 직접 호출 경로 미커버 → 거절
+  > 
+  > ### P2-1 — 가드 위반 fallback 정책 명문화
+- **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):
+  - (없음 — 본 PR 머지 후 PR #48 reviewer P2-1·P2-2 종결)
+  - 별도 트랙은 SESSION_NOTES 2026-05-13 entry follow-up 표 참조 (A-3/A-4/A-5/B-1/B-2/C-1/C-2/C-3)

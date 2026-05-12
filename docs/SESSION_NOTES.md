@@ -197,3 +197,43 @@
 - PR #43 의 reviewer P2 코멘트 3건은 follow-up 표 5번으로 이월 — 본 세션 처리 안 함.
 - PR #46 의 NL 분기 동시성 구현은 다음 세션 1번 트랙 — `feat/dev-relay-nl-serialize` 브랜치 미생성 상태.
 - 1~2주 운영 데이터 수집 prerequisite 가 걸린 트랙 2건 (6번, 7번) — 즉시 진입 불가.
+
+---
+
+## 2026-05-13 — NL 직렬화 impl 머지 + reviewer P2 후속 chore
+
+**요약**: 직전 세션 follow-up 표 1번(`dev-relay-nl-serialize` 구현) 종결 — PR #48 머지. PR #48 reviewer 가 남긴 P2-1·P2-2 후속 메모 2건을 본 세션에서 chore PR 로 처리. NL 분기는 이제 데몬 shutdown 시 새 진입 거절 + 진행 중 1건 graceful 종료가 wire 된 상태.
+
+### 처리한 일
+
+- **PR [#48](https://github.com/deeptrading-lab/trading-signal-engine/pull/48)** — `dev-relay-nl-serialize` 구현 (옵션 C: process-wide `threading.Lock` 단일 인스턴스). impl commit `40efb0c`. QA AC 9/9 PASS, reviewer P0=0 P1=0 P2=3 (P2-1 가드 위반 fallback 명문화 / P2-2 `_nl_shutdown_flag.set()` 호출 측 미통합 / P2-3 self-review 한계 — 비범위).
+- **본 PR (chore)** — `dev-relay-nl-shutdown-wire`. reviewer P2-1 + P2-2 후속.
+  - P2-1: `_emit_nl_busy_notice` 가드 위반 fallback 의도를 한 줄 코멘트로 명문화 (정책: 사용자 무발사 = 컴플라이언스 우선).
+  - P2-2: `shutdown_dev_relay(runner, *, timeout, logger)` 헬퍼 신설 → NL flag set + `AgentRunner.shutdown` 위임. `run()` finally 절에서 호출. 단위 테스트 5건 추가.
+- **SESSION_NOTES 동봉** — 본 항목 (정책 준수, 별도 PR 금지).
+
+### 결정·합의 사항
+
+- **NL shutdown wire 설계 = 옵션 (b)**: `dev_relay/main.py` 에 통합 헬퍼 `shutdown_dev_relay(runner, *, timeout, logger)` 추가. 근거 — (1) `AgentRunner` 외부 시그니처 불변 (회귀 0), (2) NL flag 가 `main.py` 모듈 스코프라 같은 모듈 안에서 wire 가 가장 자연스러움, (3) 후속 정리 (예: handler.close / picker.stop) 와 묶을 위치가 분명. 옵션 (a) `AgentRunner.shutdown` 내부 호출은 모듈 전역 의존이 들어가 책임 분리 위반 — 거절. 옵션 (c) OS SIGTERM/SIGINT 핸들러 통합은 lifecycle 분기점이 늘어남 — 거절.
+- **PR #48 reviewer 가 `--approve` 대신 `--comment` 사용**: GitHub 가 동일 사용자 자가-승인 API 를 차단해 발생. AGENTS.md L235 정책 부연 허용 범위 내. 후속 트랙: 별도 운영자 / cmux 패널로 reviewer 분리 검토 (follow-up 표 B-2).
+- **단독 SESSION_NOTES PR 금지** 정책 준수: 본 entry 는 본 chore PR 브랜치에 동봉.
+
+### 다음 세션 시작 포인트 (follow-up 표 — 갱신)
+
+직전 표 1번(`dev-relay-nl-serialize` impl) 종결. 본 chore PR 머지 후 reviewer P2-1·P2-2 도 종결. P2-3 (self-review 한계) 는 B-2 트랙으로 일반화.
+
+| 우선 | 항목 | 슬러그/이슈 | 비고 |
+|---|---|---|---|
+| A-3 | audit `user_id` 추적 누락 fix | 직전 세션 P2 (reviewer C-2 후속) | 즉시 가능. chore 또는 작은 PRD |
+| A-4 | PR #43 reviewer P2 코멘트 3건 | [#43 review comment](https://github.com/deeptrading-lab/trading-signal-engine/pull/43#issuecomment-4389053077) | 즉시 가능. (a) `validate_approval(expected=None)` fallback, (b) `_build_reviewer` NotImplementedError fallback, (c) `_post_blocks_to_thread` blocks 가드 미적용 |
+| A-5 | 사용자 검증 이슈 4건 회귀 테스트화 | 직전 세션 P3 (reviewer 권고) | 즉시 가능 |
+| B-1 | Phase 2 PRD `dev-relay-write-tools` | 직전 세션 P2 | PRD 필요 — write 도구 + 머지 confirm |
+| B-2 | reviewer 운영자 분리 (정책 결정) | PR #48 reviewer P2-3 일반화 | GitHub 자가-승인 차단 회피 — 별도 cmux 패널/운영자 권장 정책화 |
+| C-1 | shell metachar `;`/`>`/`<`/`&` 추가 허용 검토 | `dev-relay-shell-chain-allow` (가칭) | PR #45 머지(2026-05-07) 후 ~2026-05-21 데이터 prerequisite |
+| C-2 | NL 분기 옵션 A/B 재설계 검토 | `dev-relay-nl-serialize-v2` (가칭) | PR #48 머지(2026-05-13) 후 ~2026-05-27 `nl_busy_rejected` 빈도 데이터 prerequisite |
+| C-3 | Issue #28 §3 운영 모니터링 | quota / audit 로테이션 / launchd plist | 일상 운영 1~2주 데이터 prerequisite — 충족 시 항목별 분기 |
+
+### 미결·블록
+
+- 본 chore PR 의 SESSION_NOTES append 는 정책 준수 (단독 PR 금지) — 본 브랜치에 동봉.
+- A-그룹 3건은 다음 세션 즉시 진입 가능. B-그룹 2건은 PRD 또는 정책 결정 필요. C-그룹 3건은 운영 데이터 수집 prerequisite.
