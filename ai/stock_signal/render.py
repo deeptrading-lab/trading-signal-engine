@@ -74,6 +74,28 @@ def render_text(brief: StockDecisionBrief) -> str:
 def render_workbench_text(analysis: WorkbenchAnalysis) -> str:
     risk = analysis.risk_plan
     rr = f"1 : {risk.risk_reward_ratio:.2f}" if risk.risk_reward_ratio is not None else "N/A"
+    position_lines: list[str] = []
+    if analysis.position is not None:
+        position = analysis.position
+        average_price = f"{position.average_price:.2f}" if position.average_price is not None else "N/A"
+        position_lines = [
+            "",
+            "보유 현황",
+            f"- 수량: {position.quantity:g}",
+            f"- 평균단가: {average_price}",
+            f"- 평가금액: ${position.market_value:,.2f}",
+            f"- 실현손익: ${position.realized_pnl:,.2f}",
+            f"- 미실현손익: ${position.unrealized_pnl:,.2f}",
+        ]
+    warning_lines = (
+        [
+            "",
+            "데이터 경고",
+            *[f"- {warning}" for warning in analysis.warnings],
+        ]
+        if analysis.warnings
+        else []
+    )
     lines = [
         f"{analysis.whitelist_entry.name} ({analysis.whitelist_entry.ticker}) 분석 워크벤치",
         "",
@@ -95,6 +117,7 @@ def render_workbench_text(analysis: WorkbenchAnalysis) -> str:
         f"- 손절 시 예상 손실: ${risk.expected_loss_if_stopped:,.2f}",
         f"- 익절 시 예상 이익: ${risk.expected_gain_if_take_profit:,.2f}",
         f"- 예상 손익비: {rr}",
+        *position_lines,
         "",
         "기간별 흐름",
         *[
@@ -107,20 +130,8 @@ def render_workbench_text(analysis: WorkbenchAnalysis) -> str:
         "",
         "주요 리스크",
         *[f"- {risk_item}" for risk_item in analysis.brief.risks],
-        *[f"- {warning}" for warning in analysis.warnings],
+        *warning_lines,
         "",
         analysis.brief.disclaimer,
     ]
-    if analysis.position is not None:
-        position = analysis.position
-        average_price = f"{position.average_price:.2f}" if position.average_price is not None else "N/A"
-        lines[lines.index("기간별 흐름"):lines.index("기간별 흐름")] = [
-            "",
-            "보유 현황",
-            f"- 수량: {position.quantity:g}",
-            f"- 평균단가: {average_price}",
-            f"- 평가금액: ${position.market_value:,.2f}",
-            f"- 실현손익: ${position.realized_pnl:,.2f}",
-            f"- 미실현손익: ${position.unrealized_pnl:,.2f}",
-        ]
     return "\n".join(lines)

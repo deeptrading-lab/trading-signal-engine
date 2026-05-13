@@ -12,6 +12,7 @@ from .models import (
     RiskPlan,
     RiskTier,
     TargetFeasibility,
+    TechnicalSnapshot,
     Timeframe,
     Trade,
     WorkbenchAction,
@@ -63,7 +64,7 @@ def analyze_workbench(
 
 def build_risk_plan(
     analysis_input: AnalysisInput,
-    technicals,
+    technicals: TechnicalSnapshot,
     feasibility: TargetFeasibility,
     risk_tier: RiskTier,
 ) -> RiskPlan:
