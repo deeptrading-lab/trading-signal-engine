@@ -24,6 +24,33 @@ class Timeframe(str, Enum):
     POSITION = "POSITION"
 
 
+class AssetType(str, Enum):
+    US_EQUITY = "US_EQUITY"
+    CRYPTO = "CRYPTO"
+
+
+class RiskTier(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    SPECULATIVE = "SPECULATIVE"
+
+
+class TargetFeasibility(str, Enum):
+    REALISTIC = "REALISTIC"
+    STRETCHED = "STRETCHED"
+    UNREALISTIC = "UNREALISTIC"
+
+
+class WorkbenchAction(str, Enum):
+    ACTIONABLE_BUY = "ACTIONABLE_BUY"
+    CONDITIONAL_BUY = "CONDITIONAL_BUY"
+    HOLD = "HOLD"
+    PARTIAL_SELL = "PARTIAL_SELL"
+    SELL = "SELL"
+    AVOID = "AVOID"
+
+
 @dataclass(frozen=True)
 class PriceBar:
     date: str
@@ -104,3 +131,87 @@ class StockDecisionBrief:
     component_scores: ComponentScores
     generated_at: str
     disclaimer: str
+
+
+@dataclass(frozen=True)
+class WhitelistEntry:
+    ticker: str
+    name: str
+    asset_type: AssetType
+    exchange: str
+    currency: str
+    sector: str
+    enabled: bool
+    risk_tier: RiskTier
+    aliases: tuple[str, ...] = ()
+    notes: str = ""
+
+
+@dataclass(frozen=True)
+class AnalysisInput:
+    ticker: str
+    capital_amount: float
+    target_return_pct: float
+    target_period_days: int
+    risk_preference: str = "BALANCED"
+    max_loss_pct: float = 2.0
+
+
+@dataclass(frozen=True)
+class HorizonSummary:
+    label: str
+    start_date: str
+    end_date: str
+    start_price: float
+    end_price: float
+    high: float
+    low: float
+    return_pct: float
+    max_drawdown_pct: float
+    volume_change_pct: float | None
+    direction: str
+
+
+@dataclass(frozen=True)
+class RiskPlan:
+    suggested_buy_amount: float
+    suggested_share_qty: float
+    entry_price: float
+    take_profit_price_for_day: float
+    stop_loss_price_for_day: float
+    invalidation_condition: str
+    expected_loss_if_stopped: float
+    expected_gain_if_take_profit: float
+    risk_reward_ratio: float | None
+
+
+@dataclass(frozen=True)
+class Trade:
+    side: str
+    quantity: float
+    price: float
+    fee: float = 0.0
+
+
+@dataclass(frozen=True)
+class PositionState:
+    quantity: float
+    average_price: float | None
+    realized_pnl: float
+    market_value: float
+    unrealized_pnl: float
+
+
+@dataclass(frozen=True)
+class WorkbenchAnalysis:
+    input: AnalysisInput
+    whitelist_entry: WhitelistEntry
+    brief: StockDecisionBrief
+    feasibility: TargetFeasibility
+    annualized_target_return_pct: float
+    horizons: list[HorizonSummary]
+    risk_plan: RiskPlan
+    position: PositionState | None
+    action: WorkbenchAction
+    ai_summary: str | None
+    warnings: list[str]
