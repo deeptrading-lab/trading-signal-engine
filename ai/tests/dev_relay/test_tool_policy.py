@@ -251,10 +251,11 @@ class TestBashPipeBypassDenied:
             ),
             # #6: segment 분리 후 `>` 잔존.
             ("cat a | grep b > out.txt", {"mutating_command"}),
-            # #7: `;` 잔존.
-            ("cat a | grep b ; rm -rf docs", {"mutating_command"}),
+            # #7: `;` 잔존. write 도구 PRD 의 destructive 강화로 `rm -rf` 가
+            # destructive 표지에 포함되어 1차 차단되므로 `destructive_command` 도 허용.
+            ("cat a | grep b ; rm -rf docs", {"mutating_command", "destructive_command"}),
             # #8: `&` 잔존 (`&&` 도 `&` 부분 문자열 매치).
-            ("cat a | grep b && rm -rf docs", {"mutating_command"}),
+            ("cat a | grep b && rm -rf docs", {"mutating_command", "destructive_command"}),
             # #9: backtick 잔존.
             ("cat a | grep `echo b`", {"mutating_command", "parse_error"}),
             # #10: destructive 1차 차단 우선.

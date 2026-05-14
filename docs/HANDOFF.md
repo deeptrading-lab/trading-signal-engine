@@ -694,3 +694,42 @@
   >    - `main.py` `handle_approve_merge` 의 `merge_failed` audit 에 `rejection_reason` 보조 키 추가. `classification: UNKNOWN_ERROR` 는 그대로 유지 — 두 차원을 분리해 분석 도구가 독립 카운트 가능 (enum 충돌 회피).
   > 
 - **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
+
+### 2026-05-14 — feat(dev-relay): Phase 2 write 도구 + reviewer SDK wire — apply patch · commit · push + F-3 (#54)
+
+- **slug**: `dev-relay-write-tools-impl` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/54
+- **요약**: feat(dev-relay): Phase 2 write 도구 + reviewer SDK wire — apply patch · commit · push + F-3
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 요약
+  > 
+  > PRD #53 (`docs/prd/dev-relay-write-tools.md`) 의 Phase 2 — write 도구 (apply patch · commit · push) + reviewer SDK callable wire (F-3) 통합 구현.
+  > 
+  > ## 변경 사항
+  > 
+  > ### 신규 모듈
+  > - `ai/dev_relay/write_tools.py` (517L) — apply patch / commit / push 코어 + destructive 가드 + dry-run preview
+  > - `ai/dev_relay/write_runtime.py` (334L) — SDK 호출 wrapper (`nl_sdk_runtime` 패턴 재사용)
+  > 
+  > ### 수정
+  > - `ai/dev_relay/main.py` — `_build_reviewer` 가 실 SDK callable 반환 (F-3 완수) + `_handle_write_command` / `_execute_*` / 버튼 핸들러 추가 + `_write_shutdown_flag` 도입
+  > - `ai/dev_relay/dispatcher.py` — `apply patch pr=N` · `commit pr=N` · `push pr=N` 라우팅 + destructive 표지 강화 (`rm -rf`, `--force`, `--amend`, `--no-verify`, `force-with-lease` 등)
+  > - `ai/dev_relay/slack_renderer.py` — write 도구 confirm Block Kit 빌더 + 13종 신규 템플릿 + 정적 가드 통과
+  > 
+  > ### 테스트
+  > - `ai/tests/dev_relay/test_write_tools.py` (40건) — destructive 가드 + preview/perform 단위
+  > - `ai/tests/dev_relay/test_dispatcher_write.py` (16건) — write 도구 명령 파싱
+  > - `ai/tests/dev_relay/test_reviewer_sdk_wire.py` (10건) — F-3 wire + 응답 파싱
+  > - `ai/tests/dev_relay/test_write_command_flow.py` (9건) — 명령 흐름 + shutdown · 멱등성 · rate limit · audit
+  > - `ai/tests/dev_relay/test_shutdown_dev_relay.py` (+1건) — write flag set 회귀
+  > 
+  > ## AC 매핑
+  > 
+  > | AC | 항목 | 구현 | 테스트 |
+  > |---|---|---|---|
+  > | AC-WT-1 | reviewer SDK callable wire (F-3) | `write_runtime.make_reviewer_callable` + `_build_reviewer` | `test_reviewer_sdk_wire.py` |
+  > | AC-WT-2 | apply patch 정상 흐름 | `_handle_write_command` + `apply_patch` + confirm | `test_write_tools.py::TestApplyPatch` |
+  > | AC-WT-3 | commit 정상 흐름 | `_execute_commit` + `perform_commit` | `test_write_tools.py::TestPerformCommit` |
+  > | AC-WT-4 | push 정상 흐름 | `_execute_push` + `perform_push` | `test_write_tools.py::TestPerformPush` |
+- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
