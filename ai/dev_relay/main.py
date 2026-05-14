@@ -157,6 +157,45 @@ def _audit_log_path() -> Path:
     return default_db_path().parent / "audit.jsonl"
 
 
+# PR #54 reviewer P1 #1 — write 도구 cwd 명시 주입.
+# 데몬 시작 디렉터리 의존을 피하기 위해 본 헬퍼가 단일 진실원.
+# 우선순위: `DEV_RELAY_REPO_ROOT` 환경변수 > git rev-parse --show-toplevel > os.getcwd().
+# 한 번 계산되면 process lifetime 동안 캐시 — 데몬 재시작 시 재계산.
+_repo_root_cache: Path | None = None
+
+
+def _resolve_repo_root() -> Path:
+    """write 도구가 사용할 repo 루트 디렉터리를 해석한다.
+
+    PR #54 reviewer P1 #1 후속 — cwd 미주입으로 잘못된 repo 에 patch 적용 위험을
+    제거하기 위한 헬퍼. 환경변수 명시값을 우선, 없으면 git toplevel, 그래도 없으면
+    현재 cwd 로 fallback.
+    """
+    global _repo_root_cache
+    if _repo_root_cache is not None:
+        return _repo_root_cache
+    env_value = (os.environ.get("DEV_RELAY_REPO_ROOT") or "").strip()
+    if env_value:
+        _repo_root_cache = Path(env_value).resolve()
+        return _repo_root_cache
+    try:
+        import subprocess as _sp
+        result = _sp.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=2.0,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            _repo_root_cache = Path(result.stdout.strip()).resolve()
+            return _repo_root_cache
+    except Exception:  # noqa: BLE001
+        pass
+    _repo_root_cache = Path(os.getcwd()).resolve()
+    return _repo_root_cache
+
+
 def _append_audit(record: dict[str, Any]) -> None:
     """audit.jsonl 한 줄 append. user_id 는 호출 측이 마스킹한 값을 넘긴다.
 
@@ -652,6 +691,36 @@ def _handle_natural_language(
 _write_pending: dict[int, dict[str, Any]] = {}
 
 
+# PR #54 reviewer P0 후속 — write 분기 SDK 호출 worker thread 진입점.
+# Slack 메시지 핸들러는 즉시 반환하고 SDK 호출은 daemon thread 에서 수행.
+# AgentRunner 와 별도 — picker 가 review job 용으로 쓰는 AgentRunner 와 race 가
+# 발생하지 않도록 본 worker 는 독립 thread 로 spawn 한다. user_id 단일·단일
+# 인스턴스 전제하에 동시 진행 가능 (각자 다른 job_id 로 격리).
+def _spawn_write_worker(
+    fn: Callable[[], None],
+    *,
+    job_id: int,
+    logger: logging.Logger,
+) -> threading.Thread:
+    """write SDK worker 를 daemon thread 로 spawn.
+
+    인자:
+    - `fn`: worker 본문 (no-arg callable). 호출 측이 closure 로 컨텍스트를 캡처.
+    - `job_id`: thread name 식별·로깅용.
+
+    반환된 thread 는 daemon=True — 데몬 process 종료 시 강제 회수된다. graceful
+    shutdown 은 `_write_shutdown_flag` set 으로 신규 진입을 차단해 처리.
+    """
+    thread = threading.Thread(
+        target=fn,
+        name=f"dev-relay-write-{job_id}",
+        daemon=True,
+    )
+    thread.start()
+    logger.info("write worker spawned: job_id=%d", job_id)
+    return thread
+
+
 def _handle_write_command(
     *,
     kind: CommandKind,
@@ -665,12 +734,20 @@ def _handle_write_command(
 ) -> None:
     """write 도구 명령 진입 (PRD §3.2 / AC-WT-2~4).
 
+    동작 순서:
     1. shutdown flag 확인 → set 이면 즉시 거절.
     2. SDK 가용성 확인 → 불가능하면 SDK 인증 안내.
-    3. PRD §3.2.3 — dry-run 생성 → confirm 다이얼로그 발사.
+    3. 큐 적재 첫 응답(빠른 안내) 즉시 동기 발사 + `*_requested` audit 1줄.
+    4. SDK 호출 + dry-run preview + confirm 다이얼로그 발사는 daemon worker
+       thread 로 위임 (PR #54 reviewer P0 후속). Slack 메시지 핸들러는 3초 timeout
+       이전에 즉시 반환.
 
-    실제 SDK 호출은 confirm 버튼 클릭 후 worker thread 에서 실행. 본 핸들러는
-    빠른 첫 응답 (큐 적재 안내) 만 발사.
+    실제 도구 실행(`apply_patch`/`perform_commit`/`perform_push`) 은 confirm 버튼
+    클릭 시점에 별도 핸들러에서 수행 — 본 핸들러는 dry-run preview 발사까지만.
+
+    PR #54 reviewer P0 / P1 #4 후속 — 이전 구현은 SDK 호출을 동기 실행해 docstring
+    과 어긋났고 Slack 3초 timeout 위반 위험이 있었다. 본 버전은 첫 응답만 동기
+    발사하고 SDK 호출은 daemon thread 에 위임한다.
     """
     masked = mask_user_id(user_id)
     thread_ts, channel_id = _extract_thread_ts(event)
@@ -742,42 +819,50 @@ def _handle_write_command(
     )
 
     # PRD §3.2.3 — dry-run + confirm 다이얼로그.
-    # SDK 호출 자체는 worker thread 에서 실행해야 하나, MVP 단순화를 위해
-    # 본 핸들러에서 동기 호출. AgentRunner queue 와의 race 는 user_id 단일·
-    # 단일 인스턴스 전제하에 허용. 향후 picker 통합은 후속 PRD.
-    try:
-        _build_and_send_write_confirm(
-            kind=kind,
-            pr_number=pr_number,
-            idempotency_key=idempotency_key,
-            job_id=job_id,
-            user_id_masked=masked,
-            thread_ts=thread_ts,
-            channel_id=channel_id,
-            say=say,
-            logger=logger,
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.exception(
-            "write command 처리 중 오류 — kind=%s job_id=%d", kind.value, job_id
-        )
-        _append_audit(
-            {
-                "ts": _now_kst(),
-                "kind": f"{audit_kind.replace('_requested', '_failed')}",
-                "job_id": job_id,
-                "pr": pr_number,
-                "classification": "unknown_error",
-                "user_id_masked": masked,
-                "error": type(exc).__name__,
-            }
-        )
-        safe_say(
-            say,
-            FALLBACK_RESPONSE,
-            logger,
-            context="write_command_error",
-        )
+    # PR #54 reviewer P0 후속 — SDK 호출 + dry-run + confirm 발사는 daemon worker
+    # thread 로 위임. Slack 메시지 핸들러는 즉시 반환 (3초 timeout 이내).
+    # 본 worker 는 process lifetime 한정 — 데몬 shutdown 시 _write_shutdown_flag 가
+    # set 되면 신규 진입이 거절되고 진행 중 worker 는 graceful 종료까지 수행.
+    failed_audit_kind = audit_kind.replace("_requested", "_failed")
+
+    def _worker() -> None:
+        try:
+            _build_and_send_write_confirm(
+                kind=kind,
+                pr_number=pr_number,
+                idempotency_key=idempotency_key,
+                job_id=job_id,
+                user_id_masked=masked,
+                thread_ts=thread_ts,
+                channel_id=channel_id,
+                say=say,
+                logger=logger,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "write command worker 처리 중 오류 — kind=%s job_id=%d",
+                kind.value,
+                job_id,
+            )
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": failed_audit_kind,
+                    "job_id": job_id,
+                    "pr": pr_number,
+                    "classification": "unknown_error",
+                    "user_id_masked": masked,
+                    "error": type(exc).__name__,
+                }
+            )
+            safe_say(
+                say,
+                FALLBACK_RESPONSE,
+                logger,
+                context="write_command_error",
+            )
+
+    _spawn_write_worker(_worker, job_id=job_id, logger=logger)
 
 
 def _build_and_send_write_confirm(
@@ -811,8 +896,11 @@ def _build_and_send_write_confirm(
         preview_push,
     )
 
+    repo_root = _resolve_repo_root()
+    cwd_str = str(repo_root)
+
     if kind is CommandKind.APPLY_PATCH_PR:
-        gen = make_patch_generator()
+        gen = make_patch_generator(cwd=cwd_str)
         if gen is None:
             safe_say(say, TEMPLATE_WRITE_SDK_UNAVAILABLE, logger, context="patch_no_sdk")
             return
@@ -901,6 +989,7 @@ def _build_and_send_write_confirm(
             "channel_id": channel_id,
             "patch": preview.raw_patch,
             "files": preview.files,
+            "cwd": str(repo_root),
         }
         blocks = build_patch_confirm_blocks(
             pr_number=pr_number,
@@ -917,7 +1006,7 @@ def _build_and_send_write_confirm(
         return
 
     if kind is CommandKind.COMMIT_PR:
-        gen = make_commit_message_generator()
+        gen = make_commit_message_generator(cwd=cwd_str)
         if gen is None:
             safe_say(say, TEMPLATE_WRITE_SDK_UNAVAILABLE, logger, context="commit_no_sdk")
             return
@@ -942,7 +1031,7 @@ def _build_and_send_write_confirm(
             return
 
         try:
-            preview = preview_commit(message, auto_stage=False)
+            preview = preview_commit(message, cwd=repo_root, auto_stage=False)
         except CommitMessageBlocked as exc:
             logger.info("commit message blocked: %s", exc)
             _append_audit(
@@ -1001,6 +1090,7 @@ def _build_and_send_write_confirm(
             "thread_ts": thread_ts,
             "channel_id": channel_id,
             "message": preview.message,
+            "cwd": str(repo_root),
         }
         blocks = build_commit_confirm_blocks(
             pr_number=pr_number,
@@ -1017,7 +1107,7 @@ def _build_and_send_write_confirm(
 
     # PUSH_PR
     try:
-        preview = preview_push()
+        preview = preview_push(cwd=repo_root)
     except PushPolicyBlocked as exc:
         logger.info("push policy blocked: %s", exc)
         _append_audit(
@@ -1062,6 +1152,7 @@ def _build_and_send_write_confirm(
         "branch": preview.branch,
         "remote": preview.remote,
         "commits": preview.commit_shas,
+        "cwd": str(repo_root),
     }
     blocks = build_push_confirm_blocks(
         pr_number=pr_number,
@@ -1091,7 +1182,9 @@ def _execute_apply_patch(
     user_id_masked = pending["user_id_masked"]
 
     try:
-        applied = apply_patch(pending["patch"])
+        applied = apply_patch(
+            pending["patch"], cwd=pending.get("cwd") or _resolve_repo_root()
+        )
     except WriteToolError as exc:
         logger.info("apply_patch 실패 (%s)", exc)
         _append_audit(
@@ -1139,7 +1232,9 @@ def _execute_commit(
     user_id_masked = pending["user_id_masked"]
 
     try:
-        sha = perform_commit(pending["message"])
+        sha = perform_commit(
+            pending["message"], cwd=pending.get("cwd") or _resolve_repo_root()
+        )
     except WriteToolError as exc:
         classification = (
             "commit_empty_tree" if "empty" in str(exc) else "unknown_error"
@@ -1193,7 +1288,10 @@ def _execute_push(
     user_id_masked = pending["user_id_masked"]
 
     try:
-        remote, branch = perform_push(remote=pending.get("remote", "origin"))
+        remote, branch = perform_push(
+            cwd=pending.get("cwd") or _resolve_repo_root(),
+            remote=pending.get("remote", "origin"),
+        )
     except WriteToolError as exc:
         classification = (
             "push_rejected" if "rejected" in str(exc) else "unknown_error"
