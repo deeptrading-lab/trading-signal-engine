@@ -69,6 +69,72 @@ TEMPLATE_REVIEW_DETAIL_LOOKUP_FAILED: str = (
     "원본 결과를 더 이상 표시할 수 없습니다. 다시 `review pr <N>` 을 실행해 주세요."
 )
 
+# PRD `dev-relay-write-tools.md` §3.2 — write 도구 안내 템플릿.
+TEMPLATE_WRITE_QUEUE_ACCEPTED_PATCH: str = (
+    "PR #{pr_number} 패치 생성을 시작합니다. 결과는 이 스레드에 보고할게요."
+)
+TEMPLATE_WRITE_QUEUE_ACCEPTED_COMMIT: str = (
+    "PR #{pr_number} 커밋 메시지 생성을 시작합니다. 결과는 이 스레드에 보고할게요."
+)
+TEMPLATE_WRITE_QUEUE_ACCEPTED_PUSH: str = (
+    "PR #{pr_number} 푸시 준비를 시작합니다. 결과는 이 스레드에 보고할게요."
+)
+
+# write 도구 confirm 대기 시 사용자 안내.
+TEMPLATE_PATCH_CONFIRM_BODY: str = (
+    "PR #{pr_number} 패치 미리 보기\n"
+    "- 변경 파일: {file_count}개\n"
+    "- 라인: +{added}/-{removed}\n"
+    "아래 버튼으로 적용 여부를 결정해 주세요."
+)
+TEMPLATE_COMMIT_CONFIRM_BODY: str = (
+    "PR #{pr_number} 커밋 메시지 미리 보기\n"
+    "- 메시지: {message}\n"
+    "- staged 파일: {file_count}개\n"
+    "아래 버튼으로 커밋 여부를 결정해 주세요."
+)
+TEMPLATE_PUSH_CONFIRM_BODY: str = (
+    "PR #{pr_number} 푸시 미리 보기\n"
+    "- 브랜치: {branch}\n"
+    "- 원격: {remote}\n"
+    "- 커밋 수: {commit_count}개\n"
+    "아래 버튼으로 푸시 여부를 결정해 주세요."
+)
+
+# write 도구 완료 안내.
+TEMPLATE_PATCH_APPLIED: str = (
+    "PR #{pr_number} 패치 적용 완료 ({file_count}개 파일)."
+)
+TEMPLATE_COMMIT_CREATED: str = (
+    "PR #{pr_number} 커밋 생성 완료 (SHA: {sha})."
+)
+TEMPLATE_PUSH_DONE: str = (
+    "PR #{pr_number} 푸시 완료 ({remote}/{branch})."
+)
+
+# write 도구 실패 안내.
+TEMPLATE_PATCH_APPLY_FAILED: str = (
+    "패치 적용에 실패했어요. PC에서 직접 확인해 주세요."
+)
+TEMPLATE_COMMIT_EMPTY_TREE: str = (
+    "변경된 내용이 없어 커밋을 만들지 못했어요."
+)
+TEMPLATE_PUSH_REJECTED: str = (
+    "원격 저장소가 푸시를 거절했어요. PC에서 직접 확인해 주세요."
+)
+TEMPLATE_WRITE_DESTRUCTIVE_BLOCKED: str = (
+    "이 작업은 PC에서 직접 처리해 주세요. 봇은 위험한 변경을 적용하지 않습니다."
+)
+TEMPLATE_WRITE_SDK_UNAVAILABLE: str = (
+    "SDK 인증이 필요합니다. 셋업을 확인한 뒤 다시 시도해 주세요."
+)
+TEMPLATE_WRITE_COMPLIANCE_BLOCKED: str = (
+    "커밋 메시지 생성에 문제가 있어 작업을 중단했어요."
+)
+TEMPLATE_WRITE_SHUTDOWN_NOTICE: str = (
+    "이전 세션에서 승인 대기 중이던 작업은 무효화됐어요. 필요하면 다시 명령해 주세요."
+)
+
 # PRD `dev-relay-agent-integration.md` §3.5 — 실패 분류 → 사용자 노출 메시지.
 TEMPLATE_FAIL_DESTRUCTIVE_BLOCKED: str = (
     "이 작업은 PC에서 직접 처리해 주세요."
@@ -341,6 +407,155 @@ def build_merge_confirm_blocks(
     ]
 
 
+def build_patch_confirm_blocks(
+    *,
+    pr_number: int,
+    idempotency_key: str,
+    job_id: int,
+    file_count: int,
+    added: int,
+    removed: int,
+) -> list[dict[str, Any]]:
+    """PRD `dev-relay-write-tools.md` §3.2.3 / AC-WT-2 — patch confirm 다이얼로그.
+
+    dry-run 요약(변경 파일·라인 수) + [패치 적용]/[취소] 버튼.
+    """
+    action_value = build_action_value_v2(
+        pr_number=pr_number,
+        idempotency_key=idempotency_key,
+        job_id=job_id,
+    )
+    body = TEMPLATE_PATCH_CONFIRM_BODY.format(
+        pr_number=pr_number,
+        file_count=file_count,
+        added=added,
+        removed=removed,
+    )
+    return [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": guard_text(body)},
+        },
+        {
+            "type": "actions",
+            "block_id": f"patch_confirm_{job_id}",
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": "apply_patch_confirm",
+                    "text": {"type": "plain_text", "text": "패치 적용"},
+                    "value": action_value,
+                    "style": "primary",
+                },
+                {
+                    "type": "button",
+                    "action_id": "cancel_write",
+                    "text": {"type": "plain_text", "text": "취소"},
+                    "value": action_value,
+                    "style": "danger",
+                },
+            ],
+        },
+    ]
+
+
+def build_commit_confirm_blocks(
+    *,
+    pr_number: int,
+    idempotency_key: str,
+    job_id: int,
+    message: str,
+    file_count: int,
+) -> list[dict[str, Any]]:
+    """PRD AC-WT-3 — commit confirm 다이얼로그."""
+    action_value = build_action_value_v2(
+        pr_number=pr_number,
+        idempotency_key=idempotency_key,
+        job_id=job_id,
+    )
+    safe_msg = guard_text(message)
+    body = TEMPLATE_COMMIT_CONFIRM_BODY.format(
+        pr_number=pr_number,
+        message=safe_msg,
+        file_count=file_count,
+    )
+    return [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": guard_text(body)},
+        },
+        {
+            "type": "actions",
+            "block_id": f"commit_confirm_{job_id}",
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": "commit_confirm",
+                    "text": {"type": "plain_text", "text": "커밋"},
+                    "value": action_value,
+                    "style": "primary",
+                },
+                {
+                    "type": "button",
+                    "action_id": "cancel_write",
+                    "text": {"type": "plain_text", "text": "취소"},
+                    "value": action_value,
+                    "style": "danger",
+                },
+            ],
+        },
+    ]
+
+
+def build_push_confirm_blocks(
+    *,
+    pr_number: int,
+    idempotency_key: str,
+    job_id: int,
+    branch: str,
+    remote: str,
+    commit_count: int,
+) -> list[dict[str, Any]]:
+    """PRD AC-WT-4 — push confirm 다이얼로그."""
+    action_value = build_action_value_v2(
+        pr_number=pr_number,
+        idempotency_key=idempotency_key,
+        job_id=job_id,
+    )
+    body = TEMPLATE_PUSH_CONFIRM_BODY.format(
+        pr_number=pr_number,
+        branch=branch,
+        remote=remote,
+        commit_count=commit_count,
+    )
+    return [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": guard_text(body)},
+        },
+        {
+            "type": "actions",
+            "block_id": f"push_confirm_{job_id}",
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": "push_confirm",
+                    "text": {"type": "plain_text", "text": "푸시"},
+                    "value": action_value,
+                    "style": "primary",
+                },
+                {
+                    "type": "button",
+                    "action_id": "cancel_write",
+                    "text": {"type": "plain_text", "text": "취소"},
+                    "value": action_value,
+                    "style": "danger",
+                },
+            ],
+        },
+    ]
+
+
 def build_status_text(
     *,
     running: int,
@@ -402,6 +617,23 @@ _STATIC_TEMPLATES: tuple[str, ...] = (
     TEMPLATE_FAIL_GITHUB_UNPROCESSABLE,
     TEMPLATE_FAIL_COMPLIANCE_BLOCKED,
     TEMPLATE_FAIL_UNKNOWN,
+    # PRD `dev-relay-write-tools.md` 신규 템플릿.
+    TEMPLATE_WRITE_QUEUE_ACCEPTED_PATCH,
+    TEMPLATE_WRITE_QUEUE_ACCEPTED_COMMIT,
+    TEMPLATE_WRITE_QUEUE_ACCEPTED_PUSH,
+    TEMPLATE_PATCH_CONFIRM_BODY,
+    TEMPLATE_COMMIT_CONFIRM_BODY,
+    TEMPLATE_PUSH_CONFIRM_BODY,
+    TEMPLATE_PATCH_APPLIED,
+    TEMPLATE_COMMIT_CREATED,
+    TEMPLATE_PUSH_DONE,
+    TEMPLATE_PATCH_APPLY_FAILED,
+    TEMPLATE_COMMIT_EMPTY_TREE,
+    TEMPLATE_PUSH_REJECTED,
+    TEMPLATE_WRITE_DESTRUCTIVE_BLOCKED,
+    TEMPLATE_WRITE_SDK_UNAVAILABLE,
+    TEMPLATE_WRITE_COMPLIANCE_BLOCKED,
+    TEMPLATE_WRITE_SHUTDOWN_NOTICE,
 )
 
 for _template in _STATIC_TEMPLATES:

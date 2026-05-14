@@ -27,9 +27,11 @@ class TestShutdownDevRelayWiring:
     def setup_method(self) -> None:
         # 이전 테스트가 set 한 상태로 남겼을 수 있으므로 매 케이스 시작 시 초기화.
         main_mod._nl_shutdown_flag.clear()
+        main_mod._write_shutdown_flag.clear()
 
     def teardown_method(self) -> None:
         main_mod._nl_shutdown_flag.clear()
+        main_mod._write_shutdown_flag.clear()
 
     def test_sets_nl_shutdown_flag(self) -> None:
         """헬퍼 호출 시 NL flag 가 set 된다."""
@@ -39,6 +41,15 @@ class TestShutdownDevRelayWiring:
         shutdown_dev_relay(runner, timeout=1.0)
 
         assert main_mod._nl_shutdown_flag.is_set()
+
+    def test_sets_write_shutdown_flag(self) -> None:
+        """PRD `dev-relay-write-tools.md` §3.6 — write flag 도 set."""
+        runner = _fresh_runner()
+        assert not main_mod._write_shutdown_flag.is_set()
+
+        shutdown_dev_relay(runner, timeout=1.0)
+
+        assert main_mod._write_shutdown_flag.is_set()
 
     def test_delegates_to_runner_shutdown(self) -> None:
         """`AgentRunner.shutdown` 이 같은 호출에서 위임된다 — runner 가 closed 상태로 전이."""
