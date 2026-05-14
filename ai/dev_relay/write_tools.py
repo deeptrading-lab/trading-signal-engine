@@ -191,6 +191,10 @@ def apply_patch(
     3. `git apply` — 실제 적용.
 
     반환: 적용된 파일 목록 tuple (audit `patch_applied.files` 에 그대로 들어감).
+
+    PR #54 reviewer P1 #1 — `cwd` 는 데몬 시작 디렉터리 의존을 피하기 위해 호출
+    측이 명시 전달하도록 권장. runner 가 주입된 테스트 경로에서는 cwd 미주입을
+    허용 (mock subprocess 가 cwd 를 참조하지 않음).
     """
     check_patch_destructive(patch_text)
 
@@ -198,6 +202,8 @@ def apply_patch(
         raise WriteToolError("git_not_found")
 
     _runner = runner or subprocess.run
+    if cwd is None and runner is None:
+        raise WriteToolError("cwd_required")
     cwd_str = str(cwd) if cwd is not None else None
 
     check_result = _runner(
@@ -291,12 +297,17 @@ def preview_commit(
     `auto_stage=True` 면 워킹트리의 unstaged 변경을 `git add -A` 로 staging 한 뒤
     검사한다 (apply patch 직후 흐름). 호출 측이 `False` 로 두면 이미 staged 변경
     만 본다.
+
+    PR #54 reviewer P1 #1 — `cwd` 는 호출 측 명시 전달 권장. runner 미주입 (실
+    subprocess 호출) 경로에서는 cwd 누락 시 `cwd_required` 분류로 거절.
     """
     check_commit_message(message)
 
     if shutil.which("git") is None:
         raise WriteToolError("git_not_found")
     _runner = runner or subprocess.run
+    if cwd is None and runner is None:
+        raise WriteToolError("cwd_required")
     cwd_str = str(cwd) if cwd is not None else None
 
     if auto_stage:
@@ -324,11 +335,16 @@ def perform_commit(
     """`git commit -m <message>` 수행 후 SHA 반환.
 
     호출 시점에 staged 변경이 있다는 가정 (`preview_commit` 이 보장).
+
+    PR #54 reviewer P1 #1 — `cwd` 는 호출 측 명시 전달 권장. runner 미주입 (실
+    subprocess 호출) 경로에서는 cwd 누락 시 `cwd_required` 분류로 거절.
     """
     check_commit_message(message)
     if shutil.which("git") is None:
         raise WriteToolError("git_not_found")
     _runner = runner or subprocess.run
+    if cwd is None and runner is None:
+        raise WriteToolError("cwd_required")
     cwd_str = str(cwd) if cwd is not None else None
 
     result = _runner(
@@ -455,10 +471,15 @@ def preview_push(
     """push dry-run 미리 보기.
 
     현재 브랜치 + push 될 커밋 SHA 목록을 수집.
+
+    PR #54 reviewer P1 #1 — `cwd` 는 호출 측 명시 전달 권장. runner 미주입 (실
+    subprocess 호출) 경로에서는 cwd 누락 시 `cwd_required` 분류로 거절.
     """
     if shutil.which("git") is None:
         raise WriteToolError("git_not_found")
     _runner = runner or subprocess.run
+    if cwd is None and runner is None:
+        raise WriteToolError("cwd_required")
     branch = _current_branch(cwd=cwd, runner=_runner)
     check_push_policy(branch)
     commits = _commits_to_push(branch, remote, cwd=cwd, runner=_runner)
@@ -474,10 +495,15 @@ def perform_push(
     """`git push <remote> <branch>` 수행. (remote, branch) 반환.
 
     push 가 거절되거나 timeout 이면 `WriteToolError` raise.
+
+    PR #54 reviewer P1 #1 — `cwd` 는 호출 측 명시 전달 권장. runner 미주입 (실
+    subprocess 호출) 경로에서는 cwd 누락 시 `cwd_required` 분류로 거절.
     """
     if shutil.which("git") is None:
         raise WriteToolError("git_not_found")
     _runner = runner or subprocess.run
+    if cwd is None and runner is None:
+        raise WriteToolError("cwd_required")
     branch = _current_branch(cwd=cwd, runner=_runner)
     check_push_policy(branch)
     cwd_str = str(cwd) if cwd is not None else None
