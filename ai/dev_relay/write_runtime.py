@@ -19,6 +19,7 @@ import logging
 import os
 from typing import Any, Callable
 
+from ai.dev_relay.nl_classifier import MODEL_HAIKU_ID, MODEL_SONNET_ID
 from ai.dev_relay.reviewer import ReviewResult
 
 _LOGGER = logging.getLogger("ai.dev_relay.write_runtime")
@@ -121,7 +122,7 @@ def make_reviewer_callable(
             f"본 시스템 프롬프트의 형식에 맞춰 한국어로 보고해 주세요."
         )
         options = ClaudeAgentOptions(
-            model="claude-sonnet-4-6",
+            model=MODEL_SONNET_ID,
             system_prompt=REVIEWER_SYSTEM_PROMPT,
             # reviewer 는 read-only 도구만 — write 도구는 reviewer 의 책임이 아니다.
             allowed_tools=["Read", "Glob", "Grep", "Bash"],
@@ -224,7 +225,7 @@ def make_patch_generator(
             f"unified diff 형식만 응답으로 출력하세요."
         )
         options = ClaudeAgentOptions(
-            model="claude-sonnet-4-6",
+            model=MODEL_SONNET_ID,
             system_prompt=WRITE_PATCH_SYSTEM_PROMPT,
             allowed_tools=["Read", "Glob", "Grep", "Bash"],
             disallowed_tools=["Edit", "Write", "NotebookEdit"],
@@ -297,7 +298,7 @@ def make_commit_message_generator(
             f"{staged_summary}"
         )
         options = ClaudeAgentOptions(
-            model="claude-haiku-4-5-20251001",
+            model=MODEL_HAIKU_ID,
             system_prompt=WRITE_COMMIT_MSG_SYSTEM_PROMPT,
             allowed_tools=[],
             max_turns=1,
@@ -324,6 +325,8 @@ def make_commit_message_generator(
 
 
 __all__ = [
+    "MODEL_HAIKU_ID",
+    "MODEL_SONNET_ID",
     "REVIEWER_SYSTEM_PROMPT",
     "WRITE_COMMIT_MSG_SYSTEM_PROMPT",
     "WRITE_PATCH_SYSTEM_PROMPT",
