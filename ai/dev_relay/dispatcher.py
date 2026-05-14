@@ -29,6 +29,10 @@ class CommandKind(str, Enum):
     STATUS = "status"
     REVIEW_PR = "review_pr"
     MERGE_PR = "merge_pr"
+    # PRD `dev-relay-write-tools.md` §3.2 — write 도구 3종.
+    APPLY_PATCH_PR = "apply_patch_pr"
+    COMMIT_PR = "commit_pr"
+    PUSH_PR = "push_pr"
     DESTRUCTIVE_BLOCKED = "destructive_blocked"
     UNKNOWN = "unknown"
 
@@ -46,12 +50,25 @@ class ParsedCommand:
 # Destructive 표지 — 입력 raw 텍스트(소문자) 안에 부분 문자열로 등장하면 차단.
 # AC-13: `git reset --hard`, `git push --force`, `branch -D`, `clean -f` 등.
 # 추가로 흔한 머지/리베이스 우회 표현도 막는다.
+#
+# PRD `dev-relay-write-tools.md` §3.3 — write 도구 도입으로 destructive 표면 확대.
+# 다음 표지를 추가:
+# - `commit --amend` / `--amend` — HEAD 재작성
+# - `--no-verify` — pre-commit 우회
+# - `push --mirror` / `--delete` — remote 일괄 변경
+# - `push --force-with-lease` — force push 변종
+# - `rm -rf` — 파일 일괄 삭제 표지 (NL 분기 진입 시 차단)
 _DESTRUCTIVE_PATTERNS: tuple[str, ...] = (
     "reset --hard",
     "push --force",
     "push -f",
+    "--force",
     "force push",
     "force-push",
+    "force-with-lease",
+    "force_with_lease",
+    "push --mirror",
+    "push --delete",
     "branch -d",
     "clean -f",
     "clean -fd",
@@ -60,11 +77,19 @@ _DESTRUCTIVE_PATTERNS: tuple[str, ...] = (
     "restore --",
     "filter-branch",
     "update-ref",
+    "--amend",
+    "--no-verify",
+    "rm -rf",
 )
 
 
 _REVIEW_PR_RE = re.compile(r"^review\s+pr\s+(\d+)$")
 _MERGE_PR_RE = re.compile(r"^merge\s+pr\s+(\d+)$")
+
+# PRD `dev-relay-write-tools.md` §3.2.3 — write 도구 명령은 `pr=<N>` 인자 강제.
+_APPLY_PATCH_RE = re.compile(r"^apply\s+patch\s+pr\s*=\s*(\d+)$")
+_COMMIT_RE = re.compile(r"^commit\s+pr\s*=\s*(\d+)$")
+_PUSH_RE = re.compile(r"^push\s+pr\s*=\s*(\d+)$")
 
 
 def normalize(text: str | None) -> str:
@@ -125,6 +150,37 @@ def parse(text: str | None) -> ParsedCommand:
             kind=CommandKind.MERGE_PR,
             raw=raw_trimmed,
             normalized=f"merge pr {pr_number}",
+            pr_number=pr_number,
+        )
+
+    # PRD `dev-relay-write-tools.md` §3.2.3 — write 도구 3종.
+    apply_match = _APPLY_PATCH_RE.match(normalized)
+    if apply_match:
+        pr_number = int(apply_match.group(1))
+        return ParsedCommand(
+            kind=CommandKind.APPLY_PATCH_PR,
+            raw=raw_trimmed,
+            normalized=f"apply patch pr={pr_number}",
+            pr_number=pr_number,
+        )
+
+    commit_match = _COMMIT_RE.match(normalized)
+    if commit_match:
+        pr_number = int(commit_match.group(1))
+        return ParsedCommand(
+            kind=CommandKind.COMMIT_PR,
+            raw=raw_trimmed,
+            normalized=f"commit pr={pr_number}",
+            pr_number=pr_number,
+        )
+
+    push_match = _PUSH_RE.match(normalized)
+    if push_match:
+        pr_number = int(push_match.group(1))
+        return ParsedCommand(
+            kind=CommandKind.PUSH_PR,
+            raw=raw_trimmed,
+            normalized=f"push pr={pr_number}",
             pr_number=pr_number,
         )
 
