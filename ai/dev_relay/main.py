@@ -67,6 +67,7 @@ from ai.dev_relay.merger import (
     MergeOutcome,
     MergeRejection,
     MergeWorker,
+    classify_merge_rejection,
     classify_merge_stderr,
     extract_sha,
     perform_merge,
@@ -141,6 +142,13 @@ def _append_audit(record: dict[str, Any]) -> None:
     PRD §3.8 — 신규 파일 생성 시 0600 권한 적용. 이미 존재하는 파일은 사용자가
     명시적으로 권한을 풀어둔 경우를 존중해 그대로 둔다 (강제로 좁히지 않음).
     부모 디렉터리(0700) 는 `JobQueue::_ensure_dir_secure` 가 보장한다.
+
+    canonical 키 정책 (PR #50):
+    - 사용자 컨텍스트가 있는 record 는 `"user_id_masked"` canonical 키를 포함.
+    - 기존 `"user"` 키는 back-compat 으로 병기 (다운스트림 분석 도구 회귀 0).
+    - `"user"` 키 deprecation 시점: **2026-07-13 이후** (PR #50 머지 2026-05-13
+      기준 60일 window). 그 시점에 다운스트림 분석 도구의 `"user_id_masked"`
+      마이그레이션 확인 후 `"user"` 키 제거 PR 별도 진행.
     """
     path = _audit_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -717,18 +725,19 @@ def build_app(
     def handle_cancel_merge(ack: Any, body: dict, say: Any) -> None:
         ack()
         user_id = extract_action_user_id(body) or ""
+        masked = mask_user_id(user_id)
         if not is_allowed_sender(user_id, config.allowed_user_ids):
             logger.info(
                 "허용되지 않은 버튼 클릭을 무시했습니다 (user=%s)",
-                mask_user_id(user_id),
+                masked,
             )
             return
         _append_audit(
             {
                 "ts": _now_kst(),
                 "kind": "button_action",
-                "user": mask_user_id(user_id),
-                "user_id_masked": mask_user_id(user_id),
+                "user": masked,
+                "user_id_masked": masked,
                 "action": "cancel_merge",
             }
         )
@@ -738,18 +747,19 @@ def build_app(
     def handle_approve_merge(ack: Any, body: dict, say: Any) -> None:
         ack()
         user_id = extract_action_user_id(body) or ""
+        masked = mask_user_id(user_id)
         if not is_allowed_sender(user_id, config.allowed_user_ids):
             logger.info(
                 "허용되지 않은 버튼 클릭을 무시했습니다 (user=%s)",
-                mask_user_id(user_id),
+                masked,
             )
             return
         _append_audit(
             {
                 "ts": _now_kst(),
                 "kind": "button_action",
-                "user": mask_user_id(user_id),
-                "user_id_masked": mask_user_id(user_id),
+                "user": masked,
+                "user_id_masked": masked,
                 "action": "approve_merge",
             }
         )
@@ -797,6 +807,9 @@ def build_app(
             )
         except MergeRejection as exc:
             logger.warning("approve_merge 검증 실패: %s", exc)
+            # PR #51 후속 F-2 #1: 재시작 거절 / idempotency 불일치 / destructive 거절 등
+            # `MergeRejection` 사유를 세분화해 audit 에 기록. raw stderr 분류와 충돌하지
+            # 않도록 `classification` 키는 그대로 두고 `rejection_reason` 보조 키 신설.
             _append_audit(
                 {
                     "ts": _now_kst(),
@@ -804,7 +817,8 @@ def build_app(
                     "job_id": payload.job_id,
                     "pr": payload.pr_number,
                     "classification": FailureClassification.UNKNOWN_ERROR.value,
-                    "user_id_masked": mask_user_id(user_id),
+                    "rejection_reason": classify_merge_rejection(exc),
+                    "user_id_masked": masked,
                 }
             )
             # PR #43 reviewer P2-1: 재시작 거절 케이스는 사용자 안내를 분기.
@@ -831,7 +845,7 @@ def build_app(
                 "kind": "merge_started",
                 "job_id": approval.job_id,
                 "pr": approval.pr_number,
-                "user_id_masked": mask_user_id(user_id),
+                "user_id_masked": masked,
             }
         )
         try:
@@ -846,7 +860,7 @@ def build_app(
                     "job_id": approval.job_id,
                     "pr": approval.pr_number,
                     "classification": classification.value,
-                    "user_id_masked": mask_user_id(user_id),
+                    "user_id_masked": masked,
                 }
             )
             safe_say(
@@ -866,7 +880,7 @@ def build_app(
                     "pr": approval.pr_number,
                     "sha": outcome.sha or "",
                     "strategy": MERGE_STRATEGY,
-                    "user_id_masked": mask_user_id(user_id),
+                    "user_id_masked": masked,
                 }
             )
             safe_say(
@@ -890,7 +904,7 @@ def build_app(
                     "job_id": approval.job_id,
                     "pr": approval.pr_number,
                     "classification": classification.value,
-                    "user_id_masked": mask_user_id(user_id),
+                    "user_id_masked": masked,
                 }
             )
             safe_say(
@@ -904,18 +918,19 @@ def build_app(
     def handle_merge_review(ack: Any, body: dict, say: Any) -> None:
         ack()
         user_id = extract_action_user_id(body) or ""
+        masked = mask_user_id(user_id)
         if not is_allowed_sender(user_id, config.allowed_user_ids):
             logger.info(
                 "허용되지 않은 버튼 클릭을 무시했습니다 (user=%s)",
-                mask_user_id(user_id),
+                masked,
             )
             return
         _append_audit(
             {
                 "ts": _now_kst(),
                 "kind": "button_action",
-                "user": mask_user_id(user_id),
-                "user_id_masked": mask_user_id(user_id),
+                "user": masked,
+                "user_id_masked": masked,
                 "action": "merge_review",
             }
         )
@@ -1301,23 +1316,66 @@ def _post_to_thread(
         logger.warning("chat_postMessage 실패 (%s)", type(exc).__name__)
 
 
+# Block Kit 에서 사용자 노출 가능한 비-text 키 (PR #51 reviewer P2 #3 후속).
+# `text`/`fields[].text`/`accessory.text.text` 외에 미래 블록 도입 시 누설 위험이
+# 있는 키들을 정적으로 나열. 현재 호출 경로 (`build_review_result_blocks`) 에서는
+# 발생하지 않으나 회귀 안전망으로 미리 보강한다.
+_BLOCK_USER_FACING_NON_TEXT_KEYS: frozenset[str] = frozenset(
+    {
+        "alt_text",      # image 블록 / image element
+        "placeholder",   # plain_text_input / select 의 안내 텍스트 (str 또는 obj)
+        "title",         # image 블록 캡션 (str 또는 plain_text obj)
+        "label",         # input 블록 라벨 (plain_text obj)
+        "hint",          # input 블록 보조 설명 (plain_text obj)
+    }
+)
+
+
 def _collect_block_user_facing_text(blocks: Any) -> list[str]:
     """Block Kit 트리에서 사용자 노출 가능한 텍스트 필드를 수집한다.
 
     PR #43 reviewer P2-3 후속의 가드 보조 헬퍼. `text.text`, plain text value
     등을 모은다. `action_id` / `block_id` / `value` 는 내부 식별자라 제외.
+
+    PR #51 reviewer P2 #2 후속: `key == "text"` 분기에서 inner 텍스트를 직접
+    수집한 뒤 같은 노드를 다시 재귀로 들어가지 않는다 (중복 수집 제거 — 동작
+    변경 0, 발사 차단 판정에 영향 없음).
+
+    PR #51 reviewer P2 #3 후속: `image.alt_text`, `input.placeholder.text`,
+    `actions.elements[].placeholder.text`, `title`, `label`, `hint` 등 비-text
+    키도 누설 위험이 있어 수집 대상에 포함. 현재 호출 경로에는 해당 블록이
+    없으므로 회귀 0, 미래 블록 도입 시 안전망 역할.
     """
     collected: list[str] = []
 
     def _visit(node: object) -> None:
         if isinstance(node, dict):
             for key, value in node.items():
-                if key == "text" and isinstance(value, str):
-                    collected.append(value)
-                elif key == "text" and isinstance(value, dict):
-                    inner = value.get("text")
-                    if isinstance(inner, str):
-                        collected.append(inner)
+                if key == "text":
+                    # plain string text — 직접 수집 + 더 들어가지 않음 (중복 방지).
+                    if isinstance(value, str):
+                        collected.append(value)
+                        continue
+                    # text 객체 ({type, text} 형태) — inner 만 수집 + 재귀 생략.
+                    if isinstance(value, dict):
+                        inner = value.get("text")
+                        if isinstance(inner, str):
+                            collected.append(inner)
+                        # text 객체 내부에는 추가 노출 가치 키가 없으므로 재귀 생략.
+                        continue
+                if key in _BLOCK_USER_FACING_NON_TEXT_KEYS:
+                    # str 직접: image.alt_text 등.
+                    if isinstance(value, str):
+                        collected.append(value)
+                        continue
+                    # plain_text obj ({type, text}): title / label / hint /
+                    # placeholder 가 obj 형태일 때.
+                    if isinstance(value, dict):
+                        inner = value.get("text")
+                        if isinstance(inner, str):
+                            collected.append(inner)
+                        # 일반 재귀로 떨어져 추가 키도 훑되, text 가 이미
+                        # 수집됐으니 아래 _visit 호출은 일관성 차원에서 유지.
                 _visit(value)
         elif isinstance(node, list):
             for item in node:

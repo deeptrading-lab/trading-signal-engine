@@ -239,7 +239,14 @@ class TestNLSessionAuditUserIdMasked:
 
 
 class TestAuditSchemaRegression:
-    """각 kind 가 `user_id_masked` 필드를 포함하는지 schema 회귀 방어."""
+    """각 kind 가 `user_id_masked` 필드를 포함하는지 schema 회귀 방어.
+
+    **셋 갱신 의무 (PR #50 후속)**: `ai/dev_relay/main.py` 에 신규 audit kind 가
+    추가되고 그 record 가 사용자 컨텍스트를 포함하면, 본 클래스의 `target_kinds`
+    셋도 함께 업데이트해야 한다. 정적 스캔이 신규 kind 의 누락을 자동으로 잡으려면
+    셋이 source-of-truth 와 동기화돼 있어야 한다. 시스템 audit (사용자 무관) 은
+    셋에 포함시키지 않는다 (Option A — 필드 자체 생략).
+    """
 
     def test_all_target_kinds_carry_user_id_masked_when_emitted_from_main(
         self, audit_path, monkeypatch
@@ -248,6 +255,9 @@ class TestAuditSchemaRegression:
 
         Source 를 직접 grep 해 `_append_audit({...})` 블록에 `user_id_masked` 키가
         존재함을 확인한다. 호출 흐름 재현 없이도 schema 누락 회귀를 잡는다.
+
+        신규 audit kind 추가 시 본 메서드의 `target_kinds` 셋도 함께 업데이트하라
+        (위 클래스 docstring 의 셋 갱신 의무 참조).
         """
         import re
 
