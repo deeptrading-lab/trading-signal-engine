@@ -47,7 +47,7 @@ class ParsedCommand:
     pr_number: int | None = None
 
 
-# Destructive 표지 — 입력 raw 텍스트(소문자) 안에 부분 문자열로 등장하면 차단.
+# Destructive 표지 — 입력 raw 텍스트(소문자) 안에 단어 경계 기반으로 등장하면 차단.
 # AC-13: `git reset --hard`, `git push --force`, `branch -D`, `clean -f` 등.
 # 추가로 흔한 머지/리베이스 우회 표현도 막는다.
 #
@@ -58,18 +58,27 @@ class ParsedCommand:
 # - `push --mirror` / `--delete` — remote 일괄 변경
 # - `push --force-with-lease` — force push 변종
 # - `rm -rf` — 파일 일괄 삭제 표지 (NL 분기 진입 시 차단)
-_DESTRUCTIVE_PATTERNS: tuple[str, ...] = (
+#
+# PR #54 reviewer P1 #2 — flag 표지(`--force`/`--amend`/`--no-verify` 등) 는 토큰
+# 경계 매치로 변경. 부분 문자열 매치(예: "amend 정책 알려줘") 가 NL 분기에서
+# 의도와 다르게 차단되던 문제 해소.
+#
+# 매칭 정책:
+# - flag-style 토큰(`--force` 등): 정규식 `\B--force\B` 가 아닌 공백 분리 토큰 동등
+#   비교 또는 단어 경계. 정확한 토큰으로만 매치되도록 한다.
+# - 다단어 표지(`reset --hard`, `push --force`): 정확한 부분 시퀀스 매치 (기존 동작
+#   유지) — flag 단독이 아닌 명령 컨텍스트라 false-positive 위험이 낮음.
+# - `rm -rf`: 시퀀스 표지 — 부분 시퀀스 매치 유지.
+
+# 시퀀스 표지 — 부분 문자열 매치 (정상 NL 에서 등장 가능성 낮음).
+_DESTRUCTIVE_SEQUENCES: tuple[str, ...] = (
     "reset --hard",
     "push --force",
     "push -f",
-    "--force",
     "force push",
     "force-push",
-    "force-with-lease",
-    "force_with_lease",
     "push --mirror",
     "push --delete",
-    "branch -d",
     "clean -f",
     "clean -fd",
     "rebase --hard",
@@ -77,10 +86,36 @@ _DESTRUCTIVE_PATTERNS: tuple[str, ...] = (
     "restore --",
     "filter-branch",
     "update-ref",
-    "--amend",
-    "--no-verify",
     "rm -rf",
 )
+
+# `branch -d` / `branch -D` 페어 — 두 토큰 연속일 때만 차단.
+_DESTRUCTIVE_TOKEN_PAIRS: tuple[tuple[str, str], ...] = (
+    ("branch", "-d"),
+    ("branch", "-D"),
+)
+
+# 단독 토큰으로 차단할 flag 집합 (실제 차단 대상).
+_DESTRUCTIVE_SINGLE_TOKENS: frozenset[str] = frozenset(
+    {
+        "--force",
+        "--amend",
+        "--no-verify",
+        "--force-with-lease",
+        "--force_with_lease",
+        "force-with-lease",
+        "force_with_lease",
+    }
+)
+
+
+def _tokenize_for_destructive_check(text: str) -> list[str]:
+    """공백 분리 토큰화. 소문자 정규화 후 빈 토큰 제거.
+
+    `_normalize` 가 이미 trim·소문자·공백 압축을 수행하지만 본 헬퍼는 단독으로도
+    안전하게 동작하도록 보수적으로 구현.
+    """
+    return [t for t in re.split(r"\s+", text.lower()) if t]
 
 
 _REVIEW_PR_RE = re.compile(r"^review\s+pr\s+(\d+)$")
@@ -102,13 +137,33 @@ def normalize(text: str | None) -> str:
 def is_destructive(text: str | None) -> bool:
     """destructive op 표지가 입력에 포함되어 있는지 (AC-13 1차 차단).
 
-    부분 문자열 매치 기반. 라우팅 단에서 unknown 으로 떨어뜨리고 별도 안내를
-    덧붙이기 위한 용도.
+    매칭 정책 (PR #54 reviewer P1 #2 후속):
+    - 시퀀스 표지(예: `reset --hard`, `push --force`, `rm -rf`): 부분 문자열 매치.
+      정상 NL 텍스트에 등장할 가능성이 매우 낮음.
+    - flag 단독 토큰(예: `--force`, `--amend`, `--no-verify`): 공백 분리 토큰
+      동등 비교. 부분 문자열 매치를 쓰면 "amend 정책 알려줘" 같은 NL 이 잘못
+      차단되므로 정확 토큰 매치만 인정.
+    - 토큰 페어(예: `branch -d`): 두 토큰 연속일 때만 차단.
+
+    라우팅 단에서 unknown 으로 떨어뜨리고 별도 안내를 덧붙이기 위한 용도.
     """
     if not text:
         return False
-    needle = text.lower()
-    return any(p in needle for p in _DESTRUCTIVE_PATTERNS)
+    lowered = text.lower()
+    for seq in _DESTRUCTIVE_SEQUENCES:
+        if seq in lowered:
+            return True
+    tokens = _tokenize_for_destructive_check(text)
+    if not tokens:
+        return False
+    token_set = set(tokens)
+    if token_set & _DESTRUCTIVE_SINGLE_TOKENS:
+        return True
+    for i in range(len(tokens) - 1):
+        pair = (tokens[i], tokens[i + 1])
+        if pair in _DESTRUCTIVE_TOKEN_PAIRS:
+            return True
+    return False
 
 
 def parse(text: str | None) -> ParsedCommand:
