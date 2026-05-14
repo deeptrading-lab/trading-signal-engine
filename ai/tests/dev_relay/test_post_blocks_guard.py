@@ -91,6 +91,109 @@ class TestCollectBlockUserFacingText:
         assert "pr=22;key=abcd;job=1" not in collected
         assert "승인" in collected
 
+    def test_text_object_not_double_collected(self):
+        """PR #51 reviewer P2 #2: `key == "text"` 분기에서 inner 만 한 번 수집.
+
+        text 객체 ({type, text}) 가 들어왔을 때 inner 텍스트는 한 번만 수집된다.
+        (중복 수집은 발사 차단 판정에 영향 0 이지만 walker 의도 명확화 차원.)
+        """
+        blocks = [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "한 번만 수집되어야 합니다"},
+            }
+        ]
+        collected = _collect_block_user_facing_text(blocks)
+        assert collected.count("한 번만 수집되어야 합니다") == 1
+
+
+class TestCollectBlockNonTextKeys:
+    """PR #51 reviewer P2 #3: 비-text 키 누락 위험 보강 회귀.
+
+    현재 호출 경로에는 image / input 블록이 없지만, 미래 도입 시 누설을 막기
+    위해 walker 가 다음 키도 수집해야 한다.
+    """
+
+    def test_image_alt_text_collected(self):
+        blocks = [
+            {
+                "type": "image",
+                "image_url": "https://example.com/x.png",
+                "alt_text": "차트 이미지 설명",
+            }
+        ]
+        collected = _collect_block_user_facing_text(blocks)
+        assert "차트 이미지 설명" in collected
+
+    def test_input_placeholder_collected(self):
+        blocks = [
+            {
+                "type": "input",
+                "label": {"type": "plain_text", "text": "라벨 텍스트"},
+                "element": {
+                    "type": "plain_text_input",
+                    "placeholder": {
+                        "type": "plain_text",
+                        "text": "여기에 입력하세요",
+                    },
+                },
+            }
+        ]
+        collected = _collect_block_user_facing_text(blocks)
+        assert "라벨 텍스트" in collected
+        assert "여기에 입력하세요" in collected
+
+    def test_actions_select_placeholder_collected(self):
+        blocks = [
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "static_select",
+                        "placeholder": {
+                            "type": "plain_text",
+                            "text": "옵션을 선택하세요",
+                        },
+                    }
+                ],
+            }
+        ]
+        assert "옵션을 선택하세요" in _collect_block_user_facing_text(blocks)
+
+    def test_image_title_collected(self):
+        blocks = [
+            {
+                "type": "image",
+                "image_url": "https://example.com/x.png",
+                "alt_text": "ok",
+                "title": {"type": "plain_text", "text": "이미지 캡션"},
+            }
+        ]
+        assert "이미지 캡션" in _collect_block_user_facing_text(blocks)
+
+    def test_dirty_alt_text_blocks_post(self):
+        """image.alt_text 에 도메인 키워드가 있으면 발사 차단된다 (회귀 안전망)."""
+        app = _FakeApp()
+        dirty_blocks = [
+            {
+                "type": "image",
+                "image_url": "https://example.com/x.png",
+                "alt_text": "leaked signal token",
+            }
+        ]
+        _post_blocks_to_thread(
+            app=app,
+            channel="C1",
+            thread_ts="123.456",
+            blocks=dirty_blocks,
+            text="알림",
+            logger=_logger(),
+        )
+        assert len(app.client.calls) == 1
+        # blocks 가 발사되지 않고 text-only fallback 으로 전환.
+        assert "blocks" not in app.client.calls[0]
+        assert app.client.calls[0]["text"] == FALLBACK_RESPONSE
+
 
 class TestPostBlocksGuardClean:
     """정상 케이스 회귀: 가드 통과 blocks 는 그대로 발사."""

@@ -441,6 +441,66 @@ class TestRunTurnSonnetBranch:
         assert called[0]["tool"] == "Bash"
 
 
+class TestNLAgentCanonicalUserKey:
+    """PR #50 reviewer P2 #1 후속: `user_id_masked` canonical 키 병기.
+
+    기존 `"user"` 키는 back-compat 유지. 두 키 모두 같은 마스킹 값을 가진다.
+    """
+
+    def test_haiku_branch_canonical_key(self, audit_records, audit_sink, now_iso):
+        def classifier(_sys, _user):
+            return ClassificationResult(label=IntentLabel.STATUS_LIKE)
+
+        def haiku(_text):
+            return HaikuResponse(text="감사합니다.")
+
+        def sonnet(_text, _sid):
+            raise AssertionError
+
+        run_turn(
+            user_text="고마워",
+            user_id_masked="U0AE7A***",
+            classifier=classifier,
+            haiku_responder=haiku,
+            sonnet_responder=sonnet,
+            audit=audit_sink,
+            now_iso=now_iso,
+        )
+
+        # llm_invoked / llm_classified 모두 canonical + back-compat 키 병기.
+        for rec in audit_records:
+            if rec["kind"] in {"llm_invoked", "llm_classified"}:
+                assert rec.get("user_id_masked") == "U0AE7A***"
+                assert rec.get("user") == "U0AE7A***"
+
+    def test_sonnet_branch_canonical_key(self, audit_records, audit_sink, now_iso):
+        def classifier(_sys, _user):
+            return ClassificationResult(label=IntentLabel.SUMMARY_REQUEST)
+
+        def sonnet(_text, _sid):
+            return SonnetResponse(text="git push --force 위험 안내", tool_calls=[])
+
+        def haiku(_text):
+            raise AssertionError
+
+        run_turn(
+            user_text="요약해줘",
+            user_id_masked="U0AE7A***",
+            classifier=classifier,
+            haiku_responder=haiku,
+            sonnet_responder=sonnet,
+            audit=audit_sink,
+            now_iso=now_iso,
+        )
+
+        # llm_response_blocked 도 canonical 키 포함.
+        blocked = [r for r in audit_records if r["kind"] == "llm_response_blocked"]
+        assert blocked
+        for rec in blocked:
+            assert rec.get("user_id_masked") == "U0AE7A***"
+            assert rec.get("user") == "U0AE7A***"
+
+
 class TestPromptInjectionIsolation:
     """AC-18: prompt injection 합성 — 사용자 텍스트가 system role 을 덮어쓰지 않는다."""
 

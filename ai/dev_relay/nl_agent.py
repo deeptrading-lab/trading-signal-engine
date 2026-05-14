@@ -230,6 +230,7 @@ def run_turn(
             "ts": now_iso(),
             "kind": "llm_invoked",
             "user": user_id_masked,
+            "user_id_masked": user_id_masked,
             "stage": ResponseStage.CLASSIFY.value,
             "model": "haiku-4-5",
             "prompt_tokens": classification.prompt_tokens,
@@ -241,6 +242,7 @@ def run_turn(
             "ts": now_iso(),
             "kind": "llm_classified",
             "user": user_id_masked,
+            "user_id_masked": user_id_masked,
             "label": classification.label.value,
             "input_chars": len(user_text or ""),
         }
@@ -256,6 +258,7 @@ def run_turn(
                 "ts": now_iso(),
                 "kind": "llm_invoked",
                 "user": user_id_masked,
+                "user_id_masked": user_id_masked,
                 "stage": ResponseStage.RESPOND.value,
                 "model": "haiku-4-5",
                 "prompt_tokens": haiku.prompt_tokens,
@@ -269,6 +272,7 @@ def run_turn(
                     "ts": now_iso(),
                     "kind": "llm_response_blocked",
                     "user": user_id_masked,
+                    "user_id_masked": user_id_masked,
                     "reason": blocked,
                 }
             )
@@ -290,6 +294,7 @@ def run_turn(
             "ts": now_iso(),
             "kind": "llm_invoked",
             "user": user_id_masked,
+            "user_id_masked": user_id_masked,
             "stage": ResponseStage.RESPOND.value,
             "model": "sonnet-4-6",
             "prompt_tokens": sonnet.prompt_tokens,
@@ -316,6 +321,7 @@ def run_turn(
                 "ts": now_iso(),
                 "kind": "llm_response_blocked",
                 "user": user_id_masked,
+                "user_id_masked": user_id_masked,
                 "reason": blocked,
             }
         )

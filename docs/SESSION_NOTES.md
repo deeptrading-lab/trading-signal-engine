@@ -200,40 +200,102 @@
 
 ---
 
-## 2026-05-13 — NL 직렬화 impl 머지 + reviewer P2 후속 chore
+## 2026-05-13 — NL 직렬화 impl 머지 + A 트랙 전체 종결
 
-**요약**: 직전 세션 follow-up 표 1번(`dev-relay-nl-serialize` 구현) 종결 — PR #48 머지. PR #48 reviewer 가 남긴 P2-1·P2-2 후속 메모 2건을 본 세션에서 chore PR 로 처리. NL 분기는 이제 데몬 shutdown 시 새 진입 거절 + 진행 중 1건 graceful 종료가 wire 된 상태.
+**요약**: 직전 세션 follow-up 표 1번(`dev-relay-nl-serialize` 구현) 종결 — PR #48 머지. 이어서 A 그룹 (즉시 가능 chore 트랙) 5건 모두 종결 — PR #49 (NL shutdown wire), PR #50 (audit user_id_masked), PR #51 (validate_approval 재시작 거절 + blocks 가드), A-5 (PR #36/#37 로 이미 회귀 자동화 — 자연 종결). NL 분기는 데몬 shutdown 시 새 진입 거절 + 진행 중 1건 graceful 종료가 wire 됐고, audit 추적성·재시작 안전성·blocks 누설 방지까지 정합 완료.
 
 ### 처리한 일
 
-- **PR [#48](https://github.com/deeptrading-lab/trading-signal-engine/pull/48)** — `dev-relay-nl-serialize` 구현 (옵션 C: process-wide `threading.Lock` 단일 인스턴스). impl commit `40efb0c`. QA AC 9/9 PASS, reviewer P0=0 P1=0 P2=3 (P2-1 가드 위반 fallback 명문화 / P2-2 `_nl_shutdown_flag.set()` 호출 측 미통합 / P2-3 self-review 한계 — 비범위).
-- **본 PR (chore)** — `dev-relay-nl-shutdown-wire`. reviewer P2-1 + P2-2 후속.
-  - P2-1: `_emit_nl_busy_notice` 가드 위반 fallback 의도를 한 줄 코멘트로 명문화 (정책: 사용자 무발사 = 컴플라이언스 우선).
-  - P2-2: `shutdown_dev_relay(runner, *, timeout, logger)` 헬퍼 신설 → NL flag set + `AgentRunner.shutdown` 위임. `run()` finally 절에서 호출. 단위 테스트 5건 추가.
-- **SESSION_NOTES 동봉** — 본 항목 (정책 준수, 별도 PR 금지).
+- **PR [#48](https://github.com/deeptrading-lab/trading-signal-engine/pull/48)** — `dev-relay-nl-serialize` 구현 (옵션 C: process-wide `threading.Lock` 단일 인스턴스). impl commit `40efb0c`. QA AC 9/9 PASS, reviewer P0=0 P1=0 P2=3.
+- **PR [#49](https://github.com/deeptrading-lab/trading-signal-engine/pull/49)** — `dev-relay-nl-shutdown-wire` chore (PR #48 reviewer P2-1 + P2-2 후속). merged `ad770c6`. `shutdown_dev_relay(runner, *, timeout, logger)` 헬퍼 + `_emit_nl_busy_notice` fallback 코멘트 보강. 신규 테스트 5건.
+- **PR [#50](https://github.com/deeptrading-lab/trading-signal-engine/pull/50)** — `dev-relay-audit-user-id` chore (A-3, 직전 세션 P2 reviewer C-2 후속). merged `4fe3ed3`. `_append_audit` 17곳에 `user_id_masked` canonical 필드 추가 (기존 `"user"` 키 back-compat 유지). 신규 테스트 5건 (정적 스캔 1 + 흐름 4).
+- **PR [#51](https://github.com/deeptrading-lab/trading-signal-engine/pull/51)** — `dev-relay-approval-guard-blocks` chore (A-4, PR #43 reviewer P2-1·P2-3 후속). merged `97cad1c`. (a) `validate_approval(expected=None)` 즉시 거절 + `TEMPLATE_RESTART_APPROVAL_REJECTED` 안내, (b) `_post_blocks_to_thread` blocks walker 가드 + `FALLBACK_RESPONSE` text-only fallback. 신규 테스트 13건.
+- **A-5 자연 종결** — "사용자 검증 이슈 4건 회귀 테스트화" 의 정체 = PR #25 reviewer Concern 4건. 모두 이미 처리됨: audit.jsonl 0600 권한 (`queue.py:105-109` + `test_queue.py:199`), PR description `.env` 정정 (코드 무관), `_RateLimiter` 단위 테스트 (`test_handle_command_nl_serialize.py::TestNLSerializeRateLimitInterop`), `AgentRunner.shutdown` watchdog (`test_agent_runner_shutdown.py`). 추가 작업 없음.
+- **SESSION_NOTES 동봉** — 본 entry 는 PR #49 머지 시 동봉됐고, 본 update (PR #50/#51 + A-5 + 누적 follow-up) 는 working tree 에만 두어 **다음 세션 첫 PR 에 묻는다** (정책: 단독 PR 금지).
 
 ### 결정·합의 사항
 
-- **NL shutdown wire 설계 = 옵션 (b)**: `dev_relay/main.py` 에 통합 헬퍼 `shutdown_dev_relay(runner, *, timeout, logger)` 추가. 근거 — (1) `AgentRunner` 외부 시그니처 불변 (회귀 0), (2) NL flag 가 `main.py` 모듈 스코프라 같은 모듈 안에서 wire 가 가장 자연스러움, (3) 후속 정리 (예: handler.close / picker.stop) 와 묶을 위치가 분명. 옵션 (a) `AgentRunner.shutdown` 내부 호출은 모듈 전역 의존이 들어가 책임 분리 위반 — 거절. 옵션 (c) OS SIGTERM/SIGINT 핸들러 통합은 lifecycle 분기점이 늘어남 — 거절.
-- **PR #48 reviewer 가 `--approve` 대신 `--comment` 사용**: GitHub 가 동일 사용자 자가-승인 API 를 차단해 발생. AGENTS.md L235 정책 부연 허용 범위 내. 후속 트랙: 별도 운영자 / cmux 패널로 reviewer 분리 검토 (follow-up 표 B-2).
-- **단독 SESSION_NOTES PR 금지** 정책 준수: 본 entry 는 본 chore PR 브랜치에 동봉.
+- **NL shutdown wire 설계 = 옵션 (b)**: `dev_relay/main.py` 에 통합 헬퍼 `shutdown_dev_relay(runner, *, timeout, logger)` 추가. 근거 — (1) `AgentRunner` 외부 시그니처 불변 (회귀 0), (2) NL flag 가 `main.py` 모듈 스코프라 같은 모듈 안에서 wire 가 가장 자연스러움, (3) 후속 정리 (handler.close / picker.stop) 와 묶을 위치가 분명. 옵션 (a) `AgentRunner.shutdown` 내부 호출은 모듈 전역 의존 — 거절. 옵션 (c) OS SIGTERM/SIGINT 핸들러 통합은 lifecycle 분기점 증가 — 거절.
+- **audit `user_id_masked` 마이그레이션 = back-compat + canonical 병기**: 기존 `"user"` 키 유지 + `"user_id_masked"` canonical 신규 추가. 다운스트림 분석 회귀 0 보장. 시스템 audit (user 무관) 정책 = Option A (필드 생략) — 본 PR 범위에서 해당 케이스 0건이라 향후 신규 시스템 audit 도입 시 적용 정책.
+- **`validate_approval` 재시작 거절 = 옵션 (a)**: `expected_idempotency_key=None` 또는 `expected_job_id=None` 즉시 거절. 새 reason 상수 + 안내 메시지 `TEMPLATE_RESTART_APPROVAL_REJECTED` 도입. 호출 경로 단일 (`handle_approve_merge`) 이라 회귀 안전.
+- **`_post_blocks_to_thread` 정적 가드**: blocks walker (`_collect_block_user_facing_text`) 별도 헬퍼로 분리 + 단위 테스트 분리. 위반 시 `FALLBACK_RESPONSE` text-only fallback 발사. 호출 측 정상 경로 회귀 0.
+- **A-5 종결 = 후보 1**: "사용자 검증 이슈 4건" = PR #25 reviewer Concern 4건. PR #36/#37 머지 시점에 회귀 자동화 완료 확인 — 추가 작업 없음. 후보 2/3 (수동 검증 항목 자동화 / 사용자 informal 발견) 가능성은 사용자 결정으로 배제.
+- **PR #48/#49/#50/#51 reviewer 가 `--approve` 대신 `--comment` 사용 (4건 연속)**: GitHub 자가-승인 API 차단으로 발생. AGENTS.md L235 허용 범위 안이나 형식 한계는 B-2 트랙으로 일반화 (별도 운영자 / cmux 패널 분리 정책 결정 필요).
+- **단독 SESSION_NOTES PR 금지** 정책 준수: 본 entry update 는 working tree 에만 두어 다음 세션 첫 작업 PR 에 자연 동봉.
 
-### 다음 세션 시작 포인트 (follow-up 표 — 갱신)
+### 수동 검증 권장 (다음 세션 시작 전 선택)
 
-직전 표 1번(`dev-relay-nl-serialize` impl) 종결. 본 chore PR 머지 후 reviewer P2-1·P2-2 도 종결. P2-3 (self-review 한계) 는 B-2 트랙으로 일반화.
+자동 테스트가 못 잡는 실제 UX·timing 부분. 모바일 Slack 1 사이클 (5~10분):
+
+1. **PR #48 NL serialize**: 같은 스레드 NL 2개 빠르게 (1~2초 간격) → 첫 정상 / 둘째 "지금 다른 요청을 처리 중이에요…" 1줄
+2. **PR #48 회귀**: 첫 응답 완료 후 같은 스레드 새 NL → 정상 응답
+3. **PR #48 + #43 별도 락**: `review pr <N>` 실행 중 다른 스레드 NL 전송 → NL 즉시 정상 처리
+4. **PR #49 shutdown**: NL turn 도중 Ctrl+C → 진행 중 응답 완료 후 종료, 그 와중 새 NL → busy 안내
+5. **PR #50 audit**: `tail -20 ~/.local/state/dev_relay/audit.jsonl` → 모든 라인에 `user_id_masked` 필드 존재
+6. **PR #51 재시작 거절** (선택, 번거로움): 데몬 재시작 후 이전 reviewer 결과의 [승인] 클릭 → "이전 세션 페이로드는 거절됩니다…" 안내
+
+시간 없으면 **1·2·5** 만 — 핵심 회귀 보호.
+
+### 다음 세션 시작 포인트 (follow-up 표 — A 트랙 종결 반영)
+
+A-그룹 (즉시 가능 chore) 5건 모두 종결. 다음 세션은 B-그룹 (PRD / 정책) 또는 누적 P2 follow-up 묶음 chore 에서 시작.
 
 | 우선 | 항목 | 슬러그/이슈 | 비고 |
 |---|---|---|---|
-| A-3 | audit `user_id` 추적 누락 fix | 직전 세션 P2 (reviewer C-2 후속) | 즉시 가능. chore 또는 작은 PRD |
-| A-4 | PR #43 reviewer P2 코멘트 3건 | [#43 review comment](https://github.com/deeptrading-lab/trading-signal-engine/pull/43#issuecomment-4389053077) | 즉시 가능. (a) `validate_approval(expected=None)` fallback, (b) `_build_reviewer` NotImplementedError fallback, (c) `_post_blocks_to_thread` blocks 가드 미적용 |
-| A-5 | 사용자 검증 이슈 4건 회귀 테스트화 | 직전 세션 P3 (reviewer 권고) | 즉시 가능 |
+| ~~A-1·A-2·A-3·A-4·A-5~~ | ~~PR #49/#50/#51 + A-5 자연 종결~~ | — | **2026-05-13 종결** |
 | B-1 | Phase 2 PRD `dev-relay-write-tools` | 직전 세션 P2 | PRD 필요 — write 도구 + 머지 confirm |
-| B-2 | reviewer 운영자 분리 (정책 결정) | PR #48 reviewer P2-3 일반화 | GitHub 자가-승인 차단 회피 — 별도 cmux 패널/운영자 권장 정책화 |
+| B-2 | reviewer 운영자 분리 (정책 결정) | PR #48~#51 reviewer 4건 연속 self-review | GitHub 자가-승인 차단 회피 — 별도 cmux 패널/운영자 권장 정책 결정. AGENTS.md L235 정합 |
+| F-1 | PR #50 reviewer P2 4건 묶음 | QA + reviewer 메모 | (1) SDK responder canonical 키 (`nl_agent.py`, `nl_sdk_runtime.py`), (2) `target_kinds` 셋 갱신 의무 docstring, (3) `"user"` 키 deprecation 시점 명시 (30~60일), (4) `mask_user_id` 중복 호출 → `masked` 변수 통일 |
+| F-2 | PR #51 reviewer P2 3건 묶음 | reviewer 메모 | (1) `merge_failed` audit single `UNKNOWN_ERROR` classification 세분화, (2) walker `key=="text"` 중복 수집 (무해, refactor), (3) image/input 블록 도입 시 `alt_text`/`placeholder` 등 비-text 키 누락 위험 |
+| F-3 | PR #43 reviewer P2-2 | `_build_reviewer` NotImplementedError fallback | reviewer wire 자체가 B-1 (write-tools) 영역 — B-1 진행 시 동시 처리 권장 |
 | C-1 | shell metachar `;`/`>`/`<`/`&` 추가 허용 검토 | `dev-relay-shell-chain-allow` (가칭) | PR #45 머지(2026-05-07) 후 ~2026-05-21 데이터 prerequisite |
 | C-2 | NL 분기 옵션 A/B 재설계 검토 | `dev-relay-nl-serialize-v2` (가칭) | PR #48 머지(2026-05-13) 후 ~2026-05-27 `nl_busy_rejected` 빈도 데이터 prerequisite |
-| C-3 | Issue #28 §3 운영 모니터링 | quota / audit 로테이션 / launchd plist | 일상 운영 1~2주 데이터 prerequisite — 충족 시 항목별 분기 |
+| C-3 | Issue #28 §3 운영 모니터링 | quota / audit 로테이션 / launchd plist | 일상 운영 1~2주 데이터 prerequisite |
 
 ### 미결·블록
 
-- 본 chore PR 의 SESSION_NOTES append 는 정책 준수 (단독 PR 금지) — 본 브랜치에 동봉.
-- A-그룹 3건은 다음 세션 즉시 진입 가능. B-그룹 2건은 PRD 또는 정책 결정 필요. C-그룹 3건은 운영 데이터 수집 prerequisite.
+- **working tree 에 본 SESSION_NOTES update 가 미커밋 상태로 남아 있음** (PR #50/#51 + A-5 + 누적 follow-up 반영). 정책상 단독 PR 금지 — **다음 세션 첫 작업 PR 브랜치에 자연 동봉** 필수. 별도 SESSION_NOTES PR 만들면 정책 위반 (이전 세션 회귀 사례 있음).
+- B-그룹 2건 (B-1 PRD / B-2 정책 결정) 은 사용자 의사결정 또는 PM 진입 필요.
+- F-그룹 3건 (P2 follow-up 8건 누적) 은 묶음 chore PR 1~2건으로 처리 가능 — 즉시 가능.
+- C-그룹 3건은 운영 데이터 수집 prerequisite — C-1 (~2026-05-21), C-2 (~2026-05-27) 자연 진입 가능 시점.
+
+---
+
+## 2026-05-15 — F-1 + F-2 묶음 chore (PR #50/#51 reviewer P2 후속 7건)
+
+**요약**: 직전 세션 follow-up 표의 F-1 (PR #50 P2 4건) + F-2 (PR #51 P2 3건) 을 1건의 묶음 chore PR 로 처리. reviewer 부담 평가 결과 — 7건 모두 작은 변경 (대부분 docstring / 한 줄 추가 / 작은 함수 신설) 이라 묶음 단일 PR 이 분할보다 검토 효율적. 직전 세션 working tree 에 미커밋이던 SESSION_NOTES update (40 라인) 도 정책 준수 차원에서 동봉.
+
+### 처리한 일
+
+- **F-1 #1 — SDK responder canonical 키 적용**: `ai/dev_relay/nl_agent.py` 6곳 (`llm_invoked` x3, `llm_classified` x1, `llm_response_blocked` x2) 에 `user_id_masked` canonical 키 병기, `"user"` 키 back-compat 유지. `ai/dev_relay/nl_sdk_runtime.py` PreToolUse hook 의 `tool_call` / `tool_denied` audit 에는 기존에 user 필드가 없었으므로 `user_id_masked` 만 신규 추가 (canonical 단일).
+- **F-1 #2 — `target_kinds` 셋 갱신 의무 docstring 보강**: `ai/tests/dev_relay/test_audit_user_id_masked.py::TestAuditSchemaRegression` 의 클래스·메서드 docstring 에 "신규 audit kind 추가 시 본 셋도 함께 업데이트하라" 명시.
+- **F-1 #3 — `"user"` 키 deprecation 시점 명시**: `_append_audit` docstring 에 `"user"` 키 deprecation = **2026-07-13 이후** (PR #50 머지 2026-05-13 기준 60일 window) 명시. 다운스트림 분석 도구 마이그레이션 확인 후 별도 PR 로 키 제거.
+- **F-1 #4 — `mask_user_id` 중복 호출 통일**: `handle_cancel_merge` / `handle_approve_merge` / `handle_merge_review` 3개 핸들러에서 `masked = mask_user_id(user_id)` 변수 1회 계산 후 재사용 (총 9곳 중복 호출 제거). 동작 변경 0.
+- **F-2 #1 — `merge_failed` audit classification 세분화**: `ai/dev_relay/merger.py` 에 7개 `REJECTION_CATEGORY_*` 상수 + `classify_merge_rejection(exc)` 헬퍼 신설 — `MergeRejection` 메시지를 `restart_no_expected` / `idempotency_mismatch` / `job_id_mismatch` / `user_not_allowed` / `invalid_payload` / `unexpected_action` / `other` 7개 카테고리로 정규화. `main.py` `handle_approve_merge` 의 `merge_failed` audit 에 `rejection_reason` 보조 키 추가 (`classification: UNKNOWN_ERROR` 는 그대로 유지 — 분석 도구 회귀 0).
+- **F-2 #2 — walker `key=="text"` 중복 수집 refactor**: `_collect_block_user_facing_text` 의 `key == "text"` 분기에서 inner 텍스트를 한 번만 수집한 뒤 `continue` 로 재귀 생략. 발사 차단 판정에 영향 0.
+- **F-2 #3 — image/input 블록 방어적 보강**: `_BLOCK_USER_FACING_NON_TEXT_KEYS = {"alt_text", "placeholder", "title", "label", "hint"}` 정적 셋 + walker 가 `str` 직접·`{type, text}` obj 둘 다 수집. 현재 호출 경로엔 해당 블록 없어 회귀 0, 미래 블록 도입 시 회귀 안전망.
+- **SESSION_NOTES 동봉** — 직전 세션의 미커밋 update (40 라인) 와 본 entry 모두 본 chore PR 브랜치 첫 commit 에 포함 (정책 준수).
+
+### 결정·합의 사항
+
+- **묶음 vs 분할 = 묶음 1 PR**: F-1 4건 + F-2 3건 모두 작은 변경 (대부분 docstring / 한 줄 추가). reviewer 가 7건을 한 번에 봐도 부담 ≤ 분할 시 컨텍스트 전환 비용. 1 PR 채택.
+- **`"user"` 키 deprecation = 2026-07-13**: 30~60일 window 중 60일 (보수). 다운스트림 분석 도구 마이그레이션이 확실히 완료될 때까지 여유. 실제 키 제거는 별도 PR.
+- **`rejection_reason` 키 vs `classification` 세분화**: 후자는 `FailureClassification` enum (5종 + UNKNOWN) 의 의미적 자리 (HTTP / SDK / destructive / compliance) 라 `MergeRejection` 사유와 직교. 별도 `rejection_reason` 키 신설로 둘을 분리 — 분석 도구가 두 차원을 독립 카운트 가능. enum 자체에 reason 을 끼우면 의미적 충돌.
+- **`_BLOCK_USER_FACING_NON_TEXT_KEYS` 정적 셋 = 보수적 명시 5개**: image / input / select / 등 Slack Block Kit 의 모든 비-text 노출 키. 미래에 새 블록 도입 시 셋만 갱신하면 됨 — walker 로직은 불변.
+
+### 다음 세션 시작 포인트 (follow-up 표 — F-1·F-2 종결 반영)
+
+| 우선 | 항목 | 슬러그/이슈 | 비고 |
+|---|---|---|---|
+| ~~F-1·F-2~~ | ~~PR #50/#51 reviewer P2 7건 묶음 chore~~ | — | **2026-05-15 종결 (본 PR)** |
+| B-1 | Phase 2 PRD `dev-relay-write-tools` | 직전 세션 P2 | PRD 필요 — write 도구 + 머지 confirm |
+| B-2 | reviewer 운영자 분리 (정책 결정) | PR #48~#51 reviewer self-review | GitHub 자가-승인 차단 회피 — 별도 cmux 패널/운영자 정책 결정 |
+| F-3 | PR #43 reviewer P2-2 | `_build_reviewer` NotImplementedError fallback | B-1 (write-tools) 영역 — B-1 진행 시 동시 처리 권장 |
+| C-1 | shell metachar 추가 허용 검토 | `dev-relay-shell-chain-allow` (가칭) | PR #45 머지(2026-05-07) 후 ~2026-05-21 데이터 prerequisite |
+| C-2 | NL 분기 옵션 A/B 재설계 검토 | `dev-relay-nl-serialize-v2` (가칭) | PR #48 머지(2026-05-13) 후 ~2026-05-27 데이터 prerequisite |
+| C-3 | Issue #28 §3 운영 모니터링 | quota / audit 로테이션 / launchd plist | 일상 운영 1~2주 데이터 prerequisite |
+| D-1 | `"user"` 키 제거 PR | 본 PR docstring deprecation 시점 | 2026-07-13 이후 다운스트림 마이그레이션 확인 후 |
+
+### 미결·블록
+
+- 본 chore PR 후 즉시 가능 트랙 (A/F) 모두 정리됨. 다음 세션은 B-1 PRD (사용자 진입 필요) 또는 C-1 데이터 점검 (~2026-05-21) 자연 진입.
