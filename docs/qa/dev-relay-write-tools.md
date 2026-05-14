@@ -269,3 +269,166 @@ backend-dev 의 deferral 은 표현상 "자율 트리거" 라는 단어를 사�
 - Phase 3 후속: AC-WT-7 NL 보조 진입을 별도 mini-PRD 또는 Phase 3 묶음으로 트래킹 권고.
 
 판정: **qa-passed**.
+
+---
+
+## 7. 재검증 (PR #54 reviewer P0+P1 fix 후 / 2026-05-15 KST)
+
+### 7.0 재검증 배경
+
+- 1차 QA `qa-passed` 판정 후 reviewer 가 P0 1건 + P1 4건 발견.
+- 4건의 fix commit 추가 (반시간 내 4건 — 빠른 turnaround):
+  - `be868cb` — P1 #3 모델 ID DRY (write_runtime → nl_classifier 공유 상수)
+  - `6c636b8` — P1 #2 dispatcher destructive 토큰 경계 매치
+  - `d0f6c4c` — P1 #1 write_tools cwd 명시 주입
+  - `3703c2d` — P0 write 분기 worker thread + P1 #4 docstring 정합 동시 해결
+- 신규 테스트 25건 (`test_pr54_reviewer_fixes.py`) 추가.
+- `impl-ready` 재부여 → QA 재검증.
+
+### 7.1 fix 매핑표
+
+| Fix | 카테고리 | 커밋 | 신규 테스트 | 판정 |
+|---|---|---|---|---|
+| F1 | P0 — write SDK 호출 worker 위임 | `3703c2d` | `TestWriteCommandWorkerPattern` 3건 | PASS |
+| F2 | P1 #1 — write_tools cwd 명시 주입 | `d0f6c4c` + `3703c2d` | `TestWriteToolsCwdInjection` 5건 | PASS |
+| F3 | P1 #2 — dispatcher 토큰 경계 매치 | `6c636b8` | `TestDispatcherDestructiveTokenMatch` 9건 + `TestNlFriendlyDestructiveBoundary` 3건 = 12건 | PASS |
+| F4 | P1 #3 — 모델 ID 공유 상수 DRY | `be868cb` | `TestWriteRuntimeModelIdShared` 2건 | PASS |
+| F5 | P1 #4 — `_handle_write_command` docstring 정합 | `3703c2d` (P0 와 동시 해결) | `TestWriteCommandWorkerPattern::test_handle_write_command_docstring_mentions_worker` 1건 | PASS |
+
+**5/5 PASS.** 25 신규 테스트 25/25 PASS.
+
+### 7.2 fix 별 검증 상세
+
+#### 7.2.1 F1 — P0 write 분기 worker thread (`3703c2d`)
+
+- **변경**: `_handle_write_command` 가 SDK 호출 본체(`_build_and_send_write_confirm`) 를 `_spawn_write_worker` 헬퍼로 daemon thread 위임. Slack 메시지 핸들러는 큐 적재 안내 + `*_requested` audit 만 동기 발사 후 즉시 반환.
+- **재현 절차**:
+  1. SDK call 을 0.3 초 sleep 으로 mock 한 후 `_handle_write_command(...)` 호출.
+  2. handler 반환까지의 wall-clock 측정.
+  3. spawn 된 thread name `dev-relay-write-{job_id}` 가 active 인지 검증.
+- **기대 결과**: handler 반환 < 0.3 초 (Slack 3 초 timeout 안전 마진 보장), spawn 된 thread 가 백그라운드에서 SDK callable 호출.
+- **결과**: PASS — `TestWriteCommandWorkerPattern::test_handle_write_command_returns_quickly_when_sdk_call_slow`, `test_spawn_write_worker_runs_callback_async` 2건 PASS. 코드상 `main.py:699 _spawn_write_worker` 가 daemon=True thread spawn + `main.py:828~865 _worker` closure 가 SDK 호출 캡슐화. `main.py:735~750` docstring 이 worker 패턴 명시.
+- **자동 테스트 명령**: `pytest ai/tests/dev_relay/test_pr54_reviewer_fixes.py::TestWriteCommandWorkerPattern -v`
+
+#### 7.2.2 F2 — write_tools cwd 명시 주입 (`d0f6c4c` + `3703c2d`)
+
+- **변경**:
+  - `write_tools.py`: `apply_patch`/`preview_commit`/`perform_commit`/`preview_push`/`perform_push` 5개 함수에 `cwd: Path|str|None` 인자 추가. runner 미주입(실 subprocess) 경로에서 cwd 미주입 시 `WriteToolError("cwd_required")` 거절.
+  - `main.py`: `_resolve_repo_root()` 헬퍼 추가 (env `DEV_RELAY_REPO_ROOT` > `git rev-parse --show-toplevel` > `os.getcwd()`). `make_patch_generator`/`make_commit_message_generator`/`preview_commit`/`preview_push` 호출 측에 cwd 명시 주입. `_write_pending` 에 cwd 보존해 confirm 후 `_execute_*` 가 동일 cwd 로 실행.
+- **재현 절차**:
+  1. `apply_patch(patch=..., cwd="/tmp/repo", runner=None)` 호출 → 실 subprocess 호출이 `cwd="/tmp/repo"` 로 전달되는지 mock 으로 검증.
+  2. cwd 미주입 + runner 미주입 호출 → `WriteToolError("cwd_required")` raise.
+  3. `_write_pending` 컨텍스트에 cwd 보존 후 confirm 핸들러가 `pending["cwd"]` 사용.
+- **기대 결과**: 호출 측이 명시한 cwd 가 subprocess 호출 매개변수까지 그대로 도달. 미주입 시 거절.
+- **결과**: PASS — `TestWriteToolsCwdInjection` 5건 (`test_apply_patch_propagates_cwd`, `test_preview_commit_propagates_cwd`, `test_perform_commit_propagates_cwd`, `test_preview_push_propagates_cwd`, `test_perform_push_propagates_cwd`) 모두 PASS. 코드상 `write_tools.py:205~226 apply_patch`, `:268~280 perform_commit`, `:291~322 preview_commit`, `:332~370 preview_push`, `:392~ perform_push` 모두 cwd 명시 인자. `main.py:899~ _resolve_repo_root() + cwd_str` wire 확인.
+
+#### 7.2.3 F3 — dispatcher destructive 토큰 경계 (`6c636b8`)
+
+- **변경**: 기존 부분 문자열 매치 → 3-tier 토큰 매치.
+  - **시퀀스** (`reset --hard`, `push --force`, `rm -rf` 등): 부분 매치 유지.
+  - **단독 flag 토큰** (`--force`, `--amend`, `--no-verify`, `--force-with-lease` 등): 공백 분리 토큰 동등 비교.
+  - **토큰 페어** (`branch -d`, `branch -D`): 연속 두 토큰일 때만 차단.
+- **재현 절차**:
+  1. **블록 케이스**: `git push origin main --force`, `fix --no-verify HEAD`, `commit --amend`, `deploy with --force-with-lease` → 모두 destructive 분류.
+  2. **시퀀스 케이스**: `git reset --hard HEAD~1`, `git push --force`, `rm -rf /tmp/foo` → destructive.
+  3. **페어 케이스**: `git branch -d feature/x`, `git branch -D feature/x` → destructive.
+  4. **NL false-positive 방지**: `amend 정책 알려줘`, `force 옵션이 왜 위험한가요`, `noverify 가 정확히 뭐지`, `force 라는 단어가 들어간 명령은 무엇이 있나요`, `amend 와 fixup 차이가 뭔가요`, `amend 가 뭔가요`, `force 옵션 설명해줘`, `noverify 무슨 뜻이지` → UNKNOWN (NL 분기로 흘러감), destructive 분류 안 됨.
+  5. **branch 단독**: `branch 정리하는 법 알려줘` → destructive 분류 안 됨 (페어 매치라서).
+- **기대 결과**: 블록 케이스 12건은 차단, NL false-positive 케이스 8건은 차단 안 됨.
+- **결과**: PASS — `TestDispatcherDestructiveTokenMatch` 9건 + `TestNlFriendlyDestructiveBoundary` 3건 = 12건 모두 PASS. 코드상 `dispatcher.py:112 _tokenize_for_destructive_check` + `:156~163` 시퀀스/토큰/페어 3-tier 분기 확인.
+
+#### 7.2.4 F4 — 모델 ID 공유 상수 DRY (`be868cb`)
+
+- **변경**: `write_runtime.py` 가 `nl_classifier.MODEL_SONNET_ID`/`MODEL_HAIKU_ID` import 후 재사용. 하드코딩 리터럴 3곳 제거.
+- **재현 절차**:
+  1. `write_runtime.py` 소스 정적 스캔 — `claude-sonnet-4-6` 또는 `claude-haiku-4-5-20251001` 하드코딩 리터럴 검색.
+  2. `write_runtime` import 시 `MODEL_SONNET_ID`/`MODEL_HAIKU_ID` 가 `nl_classifier` 의 identity 와 같은지 검증.
+- **기대 결과**: 하드코딩 0 hit. import 정합.
+- **결과**: PASS — `TestWriteRuntimeModelIdShared` 2건 (`test_no_hardcoded_model_ids`, `test_imports_shared_constants`) PASS. `grep "MODEL_SONNET_ID\|MODEL_HAIKU_ID" dev_relay/write_runtime.py` 결과 `write_runtime.py:22 from ai.dev_relay.nl_classifier import MODEL_HAIKU_ID, MODEL_SONNET_ID` 후 `:125 / :228 / :301` 3곳 모두 상수 참조.
+
+#### 7.2.5 F5 — `_handle_write_command` docstring 정합 (`3703c2d`)
+
+- **변경**: docstring 의 "큐 적재 → SDK 호출 → confirm" 흐름 표현이 worker 패턴에 정합하도록 갱신 (`main.py:735~750`).
+- **재현 절차**: `_handle_write_command.__doc__` 에 "daemon worker" 또는 "thread" 또는 "즉시 반환" 키워드 포함 검증.
+- **기대 결과**: docstring 에 worker 패턴 명시.
+- **결과**: PASS — `TestWriteCommandWorkerPattern::test_handle_write_command_docstring_mentions_worker` PASS. docstring 라인 `741~743` "daemon worker thread 로 위임" + `742~743` "Slack 메시지 핸들러는 3초 timeout 이전에 즉시 반환" 확인.
+
+### 7.3 기존 AC 회귀 검증
+
+| AC | 1차 판정 | 재검증 판정 | 비고 |
+|---|---|---|---|
+| AC-WT-1 reviewer SDK wire | PASS | PASS | `_build_reviewer` 변경 없음. P0 fix 가 reviewer wire 에 영향 없음 (write 분기만 worker 추가). |
+| AC-WT-2 apply patch | PASS | PASS | worker 패턴 변경 후에도 dispatch → confirm → 적용 흐름 정상. cwd 명시 주입으로 운영 안전성 향상. |
+| AC-WT-3 commit | PASS | PASS | 동일. `_write_pending["cwd"]` 보존으로 confirm 후 cwd 일관. |
+| AC-WT-4 push | PASS | PASS | 동일. |
+| AC-WT-5 destructive 가드 | PASS | PASS | F3 토큰 경계 fix 후에도 블록 케이스 차단 정상 (`TestDispatcherDestructiveTokenMatch::test_flag_as_single_token_is_destructive` 4건 + `test_sequence_patterns_still_blocked` + `test_branch_delete_pair_blocked` PASS). NL false-positive 만 해소. |
+| AC-WT-6 confirm 취소 | PASS | PASS | 변경 없음. |
+| AC-WT-7 NL 보조 | DEFERRED | DEFERRED | 변경 없음. Phase 3 후속. |
+| AC-WT-8 동시성 | PASS | PASS | write worker 는 daemon thread 로 spawn — `AgentRunner(max_workers=1)` 의 review job 과 race 없음. `JobQueue.enqueue` UNIQUE 가드는 별개 메커니즘으로 동일 client_msg_id 중복은 여전히 차단. |
+| AC-WT-9 graceful degradation | PASS | PASS | `is_sdk_available()` 분기는 worker 진입 **전** 에 동기 검사 — 변경 없음. |
+| AC-WT-10 shutdown 보호 | PASS | PASS | `_write_shutdown_flag.is_set()` 도 worker 진입 **전** 에 검사 — set 이후 신규 진입 즉시 거절. daemon thread 는 process 종료 시 강제 회수. |
+| AC-WT-11 멱등성 | PASS | PASS | `JobQueue.enqueue` UNIQUE 제약 — 변경 없음. |
+| AC-WT-12 rate limit | PASS | PASS | `_RateLimiter` 는 메시지 핸들러 진입점에서 검사 — 변경 없음. |
+| AC-WT-13 audit | PASS | PASS | worker 패턴 변경 후 audit 순서: `*_requested` (sync, 핸들러) → `*_generated` (async, worker) → `*_confirmed` (button) → `*_applied/_created/_done` (button). `*_requested` 가 sync 발사라 logical 순서 보존 — 회귀 테스트 `TestWriteAuditCompleteness` 정상. |
+| AC-WT-14 컴플라이언스 정적 검사 | PASS | PASS | 56/56 PASS. 신규 fix code 포함 정적 스캔 0 hit. |
+| AC-WT-15 커밋 메시지 | PASS | PASS | 변경 없음. |
+| AC-WT-16 회귀 0 fail | PASS | PASS | dev_relay 637 / ai 전체(workbench 제외) 815 PASS. |
+
+### 7.4 재검증 자동 테스트 결과
+
+```
+$ cd ai && pytest tests/dev_relay/test_pr54_reviewer_fixes.py -v
+25 passed in 0.55s
+
+$ cd ai && pytest tests/dev_relay/test_write_tools.py tests/dev_relay/test_write_command_flow.py tests/dev_relay/test_reviewer_sdk_wire.py tests/dev_relay/test_dispatcher_write.py -v
+75 passed in 0.19s
+
+$ cd ai && pytest tests/dev_relay/ -q
+637 passed in 3.12s
+
+$ cd ai && pytest tests/ -q --ignore=tests/test_stock_signal_workbench.py
+815 passed in 3.24s
+
+$ cd ai && pytest tests/dev_relay/test_compliance.py -v
+56 passed in 0.03s
+```
+
+1차 QA 대비 추가 통과:
+- dev_relay: 612 → 637 (+25 신규)
+- ai 전체: 790 → 815 (+25 신규)
+- 컴플라이언스 56 → 56 (변경 없음, 정적 스캔 0 hit 유지)
+
+`test_stock_signal_workbench.py` 는 1차와 동일하게 `fastapi` 미설치로 collection error — 본 PRD 비대상.
+
+### 7.5 worker 패턴 변경의 운영 영향 평가 (우선 점검)
+
+**가장 큰 변화** 인 worker 패턴 도입의 운영 표면을 별도 점검.
+
+| 점검 항목 | 평가 | 근거 |
+|---|---|---|
+| Slack 응답 흐름 | 안전 | 메시지 핸들러는 큐 적재 안내 즉시 발사 후 반환 (< 0.3s 검증). 3초 timeout 위반 위험 0. |
+| audit 순서 정합 | 안전 | `*_requested` 는 sync, worker 안의 `*_generated`/confirm 은 async — logical 순서 보존. 동일 job_id 로 묶이므로 audit replay 시 정합. |
+| 동시성 race | 안전 | daemon worker 는 `AgentRunner` 와 별도 thread pool. user_id 단일·단일 인스턴스 전제로 race 없음. `_write_pending` 은 dict 단위 atomic op (set/pop). |
+| shutdown graceful | 안전 | daemon=True 로 process 종료 시 강제 회수. 진행 중 op 는 watchdog 보호 (PRD §3.6 정책). 신규 진입은 `_write_shutdown_flag` 사전 검사로 거절. |
+| 예외 처리 | 안전 | worker 본체에 `try/except` 로 logger.exception 발사. 핸들러 영향 없음. |
+| logging 가시성 | 안전 | `write worker spawned: job_id=N` info log 로 trace 가능. |
+
+### 7.6 컴플라이언스 점검
+
+- fix commit message 4건 정적 스캔 — `FORBIDDEN_KEYWORDS` 0 hit (`be868cb`/`6c636b8`/`d0f6c4c`/`3703c2d` 모두 한글 + git/SDK 기술 용어만).
+- fix code 4건 정적 스캔 — `test_compliance.py::test_dev_relay_source_clean` 56 PASS 에 신규 코드 포함.
+- 신규 테스트 25건 정적 스캔 — `test_pr54_reviewer_fixes.py` 도 컴플라이언스 통과 (별도 테스트는 없으나 정적 스캔 패턴이 dev_relay/tests 전 디렉터리 커버).
+- docstring 변경 — 트레이딩 도메인 키워드 0 hit.
+
+### 7.7 재검증 최종 판정
+
+- **5/5 fix PASS** (P0 1건 + P1 4건 모두 해소).
+- **25 신규 테스트 25/25 PASS**.
+- **기존 AC 16건 회귀**: 15 PASS + 1 DEFERRED (AC-WT-7) — 1차와 동일, 회귀 0 fail.
+- **회귀 스위트**: dev_relay 637 / ai 전체 (workbench 제외) 815 PASS, 0 fail.
+- **컴플라이언스**: 0 hit.
+- **worker 패턴 변경 운영 영향**: 안전 — Slack 3초 timeout 위반 위험 0, audit/race/shutdown/예외 처리 모두 정합.
+
+**재검증 판정: qa-passed (유지).**
+
+PRD 모든 AC 해소 + reviewer P0/P1 5건 후속 fix 완료. PR #54 머지 안전.
