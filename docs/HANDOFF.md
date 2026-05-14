@@ -655,3 +655,42 @@
   > 
   > ## 테스트 결과
 - **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
+
+### 2026-05-14 — chore(dev-relay): PR #50/#51 reviewer P2 후속 묶음 — audit canonical + classify + walker (#52)
+
+- **slug**: `dev-relay-audit-followups` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/52
+- **요약**: chore(dev-relay): PR #50/#51 reviewer P2 후속 묶음 — audit canonical + classify + walker
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 배경
+  > 
+  > PR #50 (audit `user_id_masked`) 와 PR #51 (validate_approval 재시작 거절 + blocks 가드) 의 reviewer P2 follow-up 7건을 묶어 처리.
+  > 
+  > **묶음 vs 분할 결정**: F-1 4건 + F-2 3건 모두 작은 변경 (대부분 docstring / 한 줄 추가 / 작은 함수 신설). reviewer 가 7건을 한 번에 봐도 부담이 분할 시 컨텍스트 전환 비용보다 낮다고 판단 → **1 PR 묶음 채택**.
+  > 
+  > ## 변경 사항
+  > 
+  > ### F-1 — PR #50 reviewer P2 4건 (audit user_id 후속)
+  > 
+  > 1. **SDK responder canonical 키 적용** (`ai/dev_relay/nl_agent.py` 6곳, `ai/dev_relay/nl_sdk_runtime.py` 2곳)
+  >    - `nl_agent.py`: `llm_invoked` x3, `llm_classified` x1, `llm_response_blocked` x2 에 `user_id_masked` 키 병기. 기존 `"user"` 키는 back-compat 유지.
+  >    - `nl_sdk_runtime.py`: PreToolUse hook 의 `tool_call` / `tool_denied` audit 에는 기존에 user 필드가 없었으므로 `user_id_masked` 만 신규 추가 (canonical 단일).
+  > 
+  > 2. **`target_kinds` 셋 갱신 의무 docstring 보강** (`test_audit_user_id_masked.py`)
+  >    - `TestAuditSchemaRegression` 클래스·메서드 docstring 에 "신규 audit kind 추가 시 본 셋도 함께 업데이트하라" 명시. 정적 스캔이 source-of-truth 와 동기화돼야 신규 kind 누락을 자동으로 잡는다.
+  > 
+  > 3. **`"user"` 키 deprecation 시점 명시** (`_append_audit` docstring)
+  >    - **2026-07-13 이후** (PR #50 머지 2026-05-13 기준 60일 window). 보수적으로 60일 채택. 실제 키 제거는 다운스트림 분석 도구 마이그레이션 확인 후 별도 PR (`D-1` 트랙).
+  > 
+  > 4. **`mask_user_id` 중복 호출 통일** (`main.py` `handle_cancel_merge` / `handle_approve_merge` / `handle_merge_review`)
+  >    - `masked = mask_user_id(user_id)` 변수 1회 계산 후 재사용. 총 9곳 중복 호출 제거. 동작 변경 0.
+  > 
+  > ### F-2 — PR #51 reviewer P2 3건 (approval guard 후속)
+  > 
+  > 1. **`merge_failed` audit classification 세분화** (`ai/dev_relay/merger.py`, `main.py`)
+  >    - 신규 상수 7개: `REJECTION_CATEGORY_RESTART_NO_EXPECTED` / `IDEMPOTENCY_MISMATCH` / `JOB_ID_MISMATCH` / `USER_NOT_ALLOWED` / `INVALID_PAYLOAD` / `UNEXPECTED_ACTION` / `OTHER`
+  >    - 신규 함수 `classify_merge_rejection(exc)` — `MergeRejection` 메시지를 카테고리 라벨로 정규화.
+  >    - `main.py` `handle_approve_merge` 의 `merge_failed` audit 에 `rejection_reason` 보조 키 추가. `classification: UNKNOWN_ERROR` 는 그대로 유지 — 두 차원을 분리해 분석 도구가 독립 카운트 가능 (enum 충돌 회피).
+  > 
+- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
