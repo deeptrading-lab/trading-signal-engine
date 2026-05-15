@@ -691,6 +691,14 @@ def _handle_natural_language(
 _write_pending: dict[int, dict[str, Any]] = {}
 
 
+# PR #54 reviewer P2 #1 후속 — 진행 중 write worker 추적용 set.
+# `shutdown_dev_relay` 가 graceful 회수 (timeout 포함) 위해 사용.
+# daemon=True 특성상 프로세스 종료 시 강제 회수되지만, shutdown 함수가 호출되는
+# 경우에는 명시적 join 으로 진행 중 작업을 끝까지 수행할 기회를 준다 (timeout).
+_active_write_workers: set[threading.Thread] = set()
+_active_write_workers_lock = threading.Lock()
+
+
 # PR #54 reviewer P0 후속 — write 분기 SDK 호출 worker thread 진입점.
 # Slack 메시지 핸들러는 즉시 반환하고 SDK 호출은 daemon thread 에서 수행.
 # AgentRunner 와 별도 — picker 가 review job 용으로 쓰는 AgentRunner 와 race 가
@@ -709,16 +717,59 @@ def _spawn_write_worker(
     - `job_id`: thread name 식별·로깅용.
 
     반환된 thread 는 daemon=True — 데몬 process 종료 시 강제 회수된다. graceful
-    shutdown 은 `_write_shutdown_flag` set 으로 신규 진입을 차단해 처리.
+    shutdown 은 `_write_shutdown_flag` set 으로 신규 진입을 차단하고,
+    `shutdown_dev_relay` 가 `_active_write_workers` 에 등록된 진행 중 thread 를
+    timeout 까지 join 한다 (PR #54 reviewer P2 #1 후속).
     """
+    def _wrapped() -> None:
+        try:
+            fn()
+        finally:
+            with _active_write_workers_lock:
+                _active_write_workers.discard(threading.current_thread())
+
     thread = threading.Thread(
-        target=fn,
+        target=_wrapped,
         name=f"dev-relay-write-{job_id}",
         daemon=True,
     )
+    with _active_write_workers_lock:
+        _active_write_workers.add(thread)
     thread.start()
     logger.info("write worker spawned: job_id=%d", job_id)
     return thread
+
+
+def _join_active_write_workers(
+    *,
+    timeout: float | None,
+    logger: logging.Logger | None = None,
+) -> None:
+    """진행 중 write worker thread 를 timeout 까지 join (PR #54 reviewer P2 #1 후속).
+
+    `_active_write_workers` set 의 snapshot 을 떠서 각 thread 를 join. timeout 이
+    None 이면 무기한 대기. timeout 이 주어지면 전체 budget 을 thread 수로 나눠
+    공평하게 배분 — 한 thread 가 hang 해도 다른 thread 가 join 기회 보장.
+    join 후에도 살아 있는 thread 는 daemon 특성상 process 종료 시 회수된다.
+    """
+    with _active_write_workers_lock:
+        snapshot = list(_active_write_workers)
+    if not snapshot:
+        return
+    if timeout is None:
+        per_thread: float | None = None
+    else:
+        # 안전 가드 — timeout 이 0 이하면 즉시 반환 (poll-only).
+        per_thread = max(timeout / len(snapshot), 0.0)
+    for thread in snapshot:
+        if not thread.is_alive():
+            continue
+        thread.join(timeout=per_thread)
+        if thread.is_alive() and logger is not None:
+            logger.warning(
+                "write worker join timeout: name=%s — daemon 강제 회수에 의존.",
+                thread.name,
+            )
 
 
 def _handle_write_command(
@@ -1827,6 +1878,9 @@ def build_app(
         user_id = extract_action_user_id(body) or ""
         if not is_allowed_sender(user_id, config.allowed_user_ids):
             return
+        # PR #52 reviewer P2 #3 후속 — 다른 핸들러와 mask_user_id 호출 패턴
+        # 통일 (1회 계산 후 재사용).
+        masked = mask_user_id(user_id)
         # PRD `dev-relay-agent-integration.md` §3.2 — 캐시 lookup.
         action_value = _extract_action_value(body)
         payload = parse_action_value_v2(action_value)
@@ -1846,7 +1900,7 @@ def build_app(
                     "kind": "reviewer_detail_lookup_failed",
                     "job_id": payload.job_id,
                     "pr": payload.pr_number,
-                    "user_id_masked": mask_user_id(user_id),
+                    "user_id_masked": masked,
                 }
             )
             safe_say(
@@ -1915,7 +1969,9 @@ def shutdown_dev_relay(
        진행 중 1건은 `try/finally` 로 graceful 종료.
     2. `_write_shutdown_flag.set()` — 신규 write 명령 진입 거절. confirm 대기
        작업은 _write_pending 에 남지만 다음 시작 시 무효화 안내.
-    3. `runner.shutdown(wait=True, timeout=timeout)` — worker 큐 graceful 종료.
+    3. `_join_active_write_workers(timeout=...)` — 진행 중 write daemon thread 를
+       timeout 까지 graceful join (PR #54 reviewer P2 #1 후속).
+    4. `runner.shutdown(wait=True, timeout=timeout)` — worker 큐 graceful 종료.
 
     flag set 은 idempotent (`threading.Event.set` 자체가 이미 set 상태면 no-op)
     이라 다중 호출 안전. 본 함수는 `run()` 의 finally 절에서 호출되며 직접 호출도
@@ -1925,6 +1981,7 @@ def shutdown_dev_relay(
     _write_shutdown_flag.set()
     if logger is not None:
         logger.info("NL/write 분기 shutdown flag set — 신규 진입 거절 시작.")
+    _join_active_write_workers(timeout=timeout, logger=logger)
     runner.shutdown(wait=True, timeout=timeout)
 
 
@@ -2237,13 +2294,16 @@ def _collect_block_user_facing_text(blocks: Any) -> list[str]:
                         collected.append(value)
                         continue
                     # plain_text obj ({type, text}): title / label / hint /
-                    # placeholder 가 obj 형태일 때.
+                    # placeholder 가 obj 형태일 때. PR #52 reviewer P2 #1 후속
+                    # — inner `text` 를 직접 수집한 뒤 `_visit(value)` 로
+                    # fallthrough 하면 같은 inner 가 dict 분기에서 한 번 더
+                    # 수집되는 중복이 발생. 무해하나 `count == 1` 보장 위해
+                    # continue 로 끊는다.
                     if isinstance(value, dict):
                         inner = value.get("text")
                         if isinstance(inner, str):
                             collected.append(inner)
-                        # 일반 재귀로 떨어져 추가 키도 훑되, text 가 이미
-                        # 수집됐으니 아래 _visit 호출은 일관성 차원에서 유지.
+                        continue
                 _visit(value)
         elif isinstance(node, list):
             for item in node:
