@@ -261,6 +261,54 @@ A-그룹 (즉시 가능 chore) 5건 모두 종결. 다음 세션은 B-그룹 (PR
 
 ---
 
+## 2026-05-13 (계속) — F + B 트랙 종결 (Dev Manager 봇 Phase 2 완료)
+
+**요약**: 본 세션 직전 A 그룹 종결 + working tree SESSION_NOTES update 가 PR #52 에 동봉되어 머지. 이어서 F 그룹 (PR #52 묶음 chore) + B 그룹 (B-1 Phase 2 write-tools + F-3 통합, B-2 reviewer 정책 명문화) 모두 종결. Dev Manager 봇이 review/merge 외에 **write 도구 (apply patch + commit + push) + reviewer SDK 실 호출** 까지 갖춘 Phase 2 상태로 진입.
+
+### 처리한 일
+
+- **PR [#52](https://github.com/deeptrading-lab/trading-signal-engine/pull/52)** — `dev-relay-audit-followups` chore (F-1 + F-2 묶음). merged `9232a77`. 9 files +527/-40, 신규 21 테스트. PR #50 reviewer P2 4건 (canonical 키 SDK responder 적용 / target_kinds docstring / `"user"` 키 deprecation 2026-07-13 / mask_user_id 통일 9곳) + PR #51 reviewer P2 3건 (`classify_merge_rejection` 7카테고리 + walker 중복 refactor + image/input 블록 방어). SESSION_NOTES update (직전 미커밋 40 라인) 동봉.
+- **PR [#53](https://github.com/deeptrading-lab/trading-signal-engine/pull/53)** — `dev-relay-write-tools` PRD (PM 산출물). merged `4412de6`. 557 라인. 사용자 결정 게이트 4건 PM 권고 그대로 채택: (1) write 도구 범위 = apply patch + commit + push, (2) 명령 진입 = structured + NL 둘 다, (3) dry-run 표시 = 변경 파일·라인 수·SHA, (4) reviewer SDK 인증 = 구독 모드 + API 키 fallback + graceful degradation.
+- **PR [#54](https://github.com/deeptrading-lab/trading-signal-engine/pull/54)** — `dev-relay-write-tools` impl + F-3 통합. merged `b98621b`. 15 files +3853/-33 (본 세션 최대 작업). 신규 모듈 2개 (`write_tools.py` 512L, `write_runtime.py` 334L), AC-WT-1~16 중 15 통과 + 1 DEFERRED (AC-WT-7 NL 자율 트리거 Phase 3 분리 정당). reviewer 1차 CHANGES_REQUESTED (P0 worker 패턴 미적용 + P1 4건) → backend-dev fix 4 commits + 신규 25 테스트 → 2차 APPROVED. F-3 (reviewer SDK callable wire) 통합 완료 — `_build_reviewer` 더 이상 NotImplementedError raise 안 함.
+- **본 PR (chore)** — `dev-relay-reviewer-policy`. B-2 정책 결정 (옵션 d 하이브리드) 채택. AGENTS.md L235 부근에 단일 운영자 MVP 단계 운영 패턴 + 다중 사용자 / 외부 PR 도입 트리거 명문화. SESSION_NOTES 본 entry 동봉.
+
+### 결정·합의 사항
+
+- **자동 머지 모드 (사용자 합의)**: B-1 진입 시 사용자가 (1-i + 2-A) 추천안 채택 — PM/PRD 단계는 사용자 검토 게이트, 그 외는 reviewer APPROVE 시 자동 머지. 본 세션 PR #54 머지·B-2 PR 머지 모두 이 합의 범위 내 자동 진행.
+- **PR #52 묶음 정합성**: F-1 + F-2 7건 묶음 1 PR. 작업 양 9 files +527 — reviewer 부담 적정. 분할 안 함.
+- **PR #54 worker 패턴 fix (P0 핵심)**: write 명령 SDK 호출이 Slack 메시지 핸들러 스레드에서 동기 실행 → 3초 timeout 위반 risk → `_spawn_write_worker` daemon thread 패턴으로 fix. NL 분기 (`nl_sdk_runtime` worker) 와 일관성. 신규 25 테스트로 race·shutdown·예외 회귀 차단.
+- **F-3 = B-1 통합 정합성**: F-3 (reviewer SDK callable wire) 가 B-1 (write-tools) 과 같은 SDK 인증·credential·rate limit 정책 공유 → 단일 spec (`docs/prd/dev-relay-write-tools.md`) 으로 일관성 확보. 분리 비용 회피.
+- **B-2 (d) 하이브리드 채택**: 1인 MVP 단계에서 (a) cmux 패널 분리는 GitHub 자가-승인 차단 그대로라 실효성 0, (b) 별도 GitHub 계정은 계정 관리 비용 ROI 낮음. (c) 현 정책 유지 + (d) 트리거 명시로 미래 확장성 확보. 트리거: 다른 사람 화이트리스트 추가 / 외부 PR 정식 편입 / self-review 누적 운영 부담 인식.
+- **AC-WT-7 DEFERRED 정당성**: PRD §10 본문에서 NL 진입을 "보조" 로 정의. Phase 3 후속 PRD (예: `dev-relay-write-tools-nl`) 로 분리. QA 가 정당성 검증 완료.
+- **수동 검증 권장 (다음 세션 시작 전 선택)**: 모바일 Slack 1 사이클 ~5~10분. 핵심 회귀 보호용 1·2·5 만 (NL busy + 회귀 + audit user_id 필드). PR #54 가 본 세션의 가장 큰 변경이므로 수동 검증 가치 높음 — write 도구 dry-run / confirm / 적용 흐름 검증 권장.
+
+### 다음 세션 시작 포인트 (follow-up 표 — F·B 트랙 종결 반영)
+
+A·F·B 모든 즉시 가능 트랙 종결. 다음 세션은 P2 누적 follow-up 또는 C 그룹 (운영 데이터 prerequisite) 진입 시점.
+
+| 우선 | 항목 | 슬러그/이슈 | 비고 |
+|---|---|---|---|
+| ~~A-1~5, F-1·F-2·F-3, B-1, B-2~~ | ~~PR #48~#54 + 본 PR 종결~~ | — | **2026-05-13 종결** |
+| F-4 | PR #52 reviewer P2 5건 | reviewer 메모 | walker dict-form 중복 / deprecation 자동 알람 (CI date check) / self-review 누적 → B-2 종결로 해소 / view_details mask 스타일 / classify_merge_rejection 비-`MergeRejection` 입력 테스트 |
+| F-5 | PR #54 reviewer P2 3건 | reviewer 메모 | daemon worker graceful join 부재 / force-with-lease NL 차단 / repo_root 캐시 |
+| B-3 | Phase 3 NL 자율 트리거 (AC-WT-7 후속) | `dev-relay-write-tools-nl` (가칭) | PR #54 DEFERRED. write 의도 자동 분류 + structured 명령 자동 변환 |
+| C-1 | shell metachar `;`/`>`/`<`/`&` 추가 허용 | `dev-relay-shell-chain-allow` (가칭) | PR #45 머지(2026-05-07) 후 ~2026-05-21 데이터 prerequisite |
+| C-2 | NL 분기 옵션 A/B 재설계 | `dev-relay-nl-serialize-v2` (가칭) | PR #48 머지(2026-05-13) 후 ~2026-05-27 `nl_busy_rejected` 빈도 데이터 prerequisite |
+| C-3 | Issue #28 §3 운영 모니터링 | quota / audit 로테이션 / launchd plist | 일상 운영 1~2주 데이터 prerequisite |
+| (참고) | PR #47 `ai-signal-workbench` 외부 PR | [#47](https://github.com/deeptrading-lab/trading-signal-engine/pull/47) | 외부 컨트리뷰터 PR 처리 방침 결정 필요 — B-2 트리거 (외부 PR 정식 편입) 와 연동 |
+| (참고) | 본업 (트레이딩 시그널 엔진) 작업 | `ai/coordinator/`, `backend/` | follow-up 표에 없음 — 별도 시즌 기획 필요. 본 세션은 100% Dev Manager 봇 도구 정비에 집중됨 |
+
+### 미결·블록
+
+- **working tree 가 본 PR 머지 후 깨끗**: SESSION_NOTES update 동봉 정책 준수 — 본 entry 는 본 PR 브랜치 동봉.
+- B-2 트리거 도래 시점에 (b) 별도 GitHub 계정 도입 검토. 현재는 단일 운영자 MVP 정합.
+- F-4·F-5 (P2 follow-up 8건 누적) 은 묶음 chore 1~2 PR 로 처리 가능 — 다음 세션 즉시 가능 후보.
+- B-3 (Phase 3 NL 자율 트리거) 는 새 PRD 필요 — 진입 비용 중간.
+- C 그룹 3건은 운영 데이터 수집 prerequisite — C-1 (~2026-05-21), C-2 (~2026-05-27) 자연 진입.
+- **본 세션 총합**: PR 7건 머지 (#48, #49, #50, #51, #52, #53, #54) + 본 chore PR. 신규 테스트 80건 누적 (NL serialize 9 + shutdown 5 + audit user_id 5 + approval guard 13 + audit followups 21 + write-tools 75 + reviewer fixes 25 + B-2 chore 0). ai 전체 815/815 PASS.
+
+---
+
 ## 2026-05-15 — F-1 + F-2 묶음 chore (PR #50/#51 reviewer P2 후속 7건)
 
 **요약**: 직전 세션 follow-up 표의 F-1 (PR #50 P2 4건) + F-2 (PR #51 P2 3건) 을 1건의 묶음 chore PR 로 처리. reviewer 부담 평가 결과 — 7건 모두 작은 변경 (대부분 docstring / 한 줄 추가 / 작은 함수 신설) 이라 묶음 단일 PR 이 분할보다 검토 효율적. 직전 세션 working tree 에 미커밋이던 SESSION_NOTES update (40 라인) 도 정책 준수 차원에서 동봉.
