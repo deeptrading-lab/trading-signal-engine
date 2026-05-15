@@ -733,3 +733,42 @@
   > | AC-WT-3 | commit 정상 흐름 | `_execute_commit` + `perform_commit` | `test_write_tools.py::TestPerformCommit` |
   > | AC-WT-4 | push 정상 흐름 | `_execute_push` + `perform_push` | `test_write_tools.py::TestPerformPush` |
 - **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
+
+### 2026-05-15 — chore(dev-relay): PR #52/#54 reviewer P2 후속 묶음 — walker dedup · daemon join · force-with-lease · classify 방어 (#56)
+
+- **slug**: `dev-relay-pr52-54-followups` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/56
+- **요약**: chore(dev-relay): PR #52/#54 reviewer P2 후속 묶음 — walker dedup · daemon join · force-with-lease · classify 방어
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 배경
+  > 
+  > 본 chore PR 은 PR #52 (F-4) 와 PR #54 (F-5) 의 reviewer P2 follow-up 7건을 묶어 처리합니다. PR #52 패턴 그대로 묶음 진행.
+  > 
+  > PRD: 없음 (chore — 기존 PR reviewer 코멘트 후속).
+  > 
+  > ## F-4 — PR #52 reviewer P2 후속 (4건)
+  > 
+  > ### #1 walker dict-form 중복 수집 제거
+  > - `ai/dev_relay/main.py` `_collect_block_user_facing_text` 의 `_BLOCK_USER_FACING_NON_TEXT_KEYS` 분기에서 inner `text` 직접 수집 후 `continue` 누락 → `_visit(value)` fallthrough 로 dict 재귀가 같은 inner 를 한 번 더 수집. 무해하나 `count == 1` 보장 위해 `continue` 추가.
+  > - 회귀: `TestWalkerDictDedup` 3건.
+  > 
+  > ### #2 `"user"` 키 deprecation 시점 자동 가드
+  > - PR #50 docstring 의 `2026-07-13` 시점을 pytest 정적 날짜 비교로 감시. 도달 시 `pytest.fail` 하여 retire 작업이 자연 트리거.
+  > - CI 추가 없이 기존 pytest 흐름에 묶임 (부담 최소).
+  > - 회귀: `TestUserKeyDeprecationDateGuard`.
+  > 
+  > ### #3 `handle_view_details` `mask_user_id` 패턴 통일
+  > - `masked = mask_user_id(user_id)` 변수 1회 계산 후 재사용 (F-1 #4 패턴 그대로). 향후 추가 마스킹 호출 시 일관성 보장.
+  > 
+  > ### #4 `classify_merge_rejection` 비-`MergeRejection` 입력 방어 테스트
+  > - 함수 시그니처는 이미 `MergeRejection | BaseException` 으로 받고 `str(exc)` 호출이라 안전 — 하지만 None/dict/str/임의 객체 입력 시 `OTHER` fallback 동작을 회귀로 묶음.
+  > - 회귀: `TestClassifyMergeRejectionDefensive` 5건.
+  > 
+  > ## F-5 — PR #54 reviewer P2 후속 (3건)
+  > 
+  > ### #1 daemon worker graceful join
+  > - `_active_write_workers: set[threading.Thread]` + `_active_write_workers_lock` 모듈 스코프 추가.
+  > - `_spawn_write_worker` 가 wrapper closure 로 add/discard 자동 수행.
+  > - 신규 `_join_active_write_workers(timeout, logger)` — timeout 을 thread 수로 공평 배분, hang 한 thread 가 다른 thread join 을 막지 않음. join timeout 초과 thread 는 로그 warning + daemon 강제 회수에 위임.
+- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
