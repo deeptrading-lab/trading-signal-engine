@@ -59,6 +59,8 @@ class ConversionFailReason(str, Enum):
     UNKNOWN_TOOL = "unknown_tool"
     LOW_CONFIDENCE = "low_confidence"
     INVALID_PR = "invalid_pr"
+    # PR #59 reviewer P1-3 — SDK 호출 timeout. NL 분기 락 보유 중 hang 가능성 0.
+    TIMEOUT = "timeout"
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,11 +209,21 @@ def convert(
     프롬프트 주입 + 응답 검증만 책임진다.
 
     빈 입력은 LLM 호출 없이 즉시 `PARSE_ERROR` 로 거절.
+
+    PR #59 reviewer P1-3 — `WriteConverterTimeout` 은 명시적으로 `TIMEOUT` 으로
+    매핑한다. 그 외 일반 예외는 기존대로 `PARSE_ERROR` fallback.
     """
     if not user_text or not user_text.strip():
         return ConversionRejection(reason=ConversionFailReason.PARSE_ERROR)
+    # import 지연 — 순수 모듈을 SDK 의존성 없이 import 할 수 있도록 유지.
+    try:
+        from ai.dev_relay.write_runtime import WriteConverterTimeout
+    except ImportError:  # pragma: no cover — SDK 미설치 환경 보호
+        WriteConverterTimeout = ()  # type: ignore[assignment]
     try:
         raw = converter(WRITE_CONVERT_SYSTEM_PROMPT, user_text)
+    except WriteConverterTimeout:
+        return ConversionRejection(reason=ConversionFailReason.TIMEOUT)
     except Exception:  # noqa: BLE001
         # SDK 호출 실패 — parse_error 로 분류해 호출 측이 §3.4 흐름으로 태운다.
         return ConversionRejection(reason=ConversionFailReason.PARSE_ERROR)
