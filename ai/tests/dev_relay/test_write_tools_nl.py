@@ -809,3 +809,287 @@ class TestACWT7Resolution:
         assert applied_calls["hit"] is False
         # confirm 발사 진입은 발생.
         assert build_send.called
+
+
+# ---------------------------------------------------------------------------
+# PR #59 reviewer P1 후속 회귀 — busy 게이트, audit chain, SDK timeout
+# ---------------------------------------------------------------------------
+
+
+class TestNLWriteBusyGate:
+    """PR #59 reviewer P1-1 — NL write 경로도 structured `running_count >= 1`
+    busy 게이트를 적용한다. structured + NL 혼합 시 confirm 다이얼로그 2건 동시
+    노출 방지 + 토큰 낭비 회피.
+    """
+
+    def _seed_running_job(self, queue):
+        """queue 에 running 상태의 job 1건을 만들어 둔다."""
+        queue.enqueue(
+            idempotency_key="seed-running",
+            user_id="U0AE7A54NHL",
+            command="review pr 99",
+        )
+        # pending → running 으로 전이.
+        claimed = queue.claim_next_pending()
+        assert claimed is not None
+
+    def test_running_count_blocks_nl_write_conversion(
+        self, queue, sessions, fake_say, logger, isolate_audit
+    ):
+        """running=1 일 때 NL write 변환 호출 0건 + busy 안내 + audit reason=busy."""
+        self._seed_running_job(queue)
+        runtime = _make_runtime()
+        rate_limiter = _RateLimiter()
+        with mock.patch(
+            "ai.dev_relay.write_runtime.is_sdk_available", return_value=True
+        ), mock.patch(
+            "ai.dev_relay.main._build_and_send_write_confirm"
+        ) as build_send:
+            _handle_command(
+                text="PR 32 에 patch 적용해줘",
+                user_id="U0AE7A54NHL",
+                event={
+                    "client_msg_id": "key-busy-1",
+                    "ts": "1.1",
+                    "channel": "D1",
+                },
+                say=fake_say,
+                logger=logger,
+                queue=queue,
+                rate_limiter=rate_limiter,
+                sessions=sessions,
+                nl_runtime=runtime,
+            )
+        # converter SDK 호출 0건 — busy 가드가 SDK 이전에 차단.
+        assert runtime["captured"]["converter_calls"] == 0
+        # confirm 발사 0건 — structured 가 이미 진행 중이므로 NL 도 confirm 0.
+        assert not build_send.called
+        # busy 안내 발사 (TEMPLATE_QUEUE_BUSY format).
+        texts = [s for s in fake_say.sent if isinstance(s, str)]
+        assert any(
+            "처리 중" in t or "대기" in t for t in texts
+        ), f"busy 안내 미발사: {texts}"
+        # audit: nl_write_conversion_failed reason=busy.
+        records = [
+            json.loads(line)
+            for line in isolate_audit.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+        failures = [
+            r for r in records if r.get("kind") == "nl_write_conversion_failed"
+        ]
+        assert failures, "nl_write_conversion_failed audit 누락"
+        assert failures[-1].get("reason") == "busy"
+
+    def test_running_count_zero_passes_through(
+        self, queue, sessions, fake_say, logger
+    ):
+        """running=0 일 때는 정상 변환 진입 (회귀 0)."""
+        runtime = _make_runtime()
+        rate_limiter = _RateLimiter()
+        with mock.patch(
+            "ai.dev_relay.write_runtime.is_sdk_available", return_value=True
+        ), mock.patch(
+            "ai.dev_relay.main._build_and_send_write_confirm"
+        ) as build_send:
+            _handle_command(
+                text="PR 32 에 patch 적용해줘",
+                user_id="U0AE7A54NHL",
+                event={
+                    "client_msg_id": "key-busy-2",
+                    "ts": "1.1",
+                    "channel": "D1",
+                },
+                say=fake_say,
+                logger=logger,
+                queue=queue,
+                rate_limiter=rate_limiter,
+                sessions=sessions,
+                nl_runtime=runtime,
+            )
+        # 정상 진입 — converter 1회 + confirm 발사.
+        assert runtime["captured"]["converter_calls"] == 1
+        assert build_send.called
+
+
+class TestNLWriteDupIgnoredAuditChain:
+    """PR #59 reviewer P1-2 — duplicate idempotency key 차단 시 audit chain 닫기.
+
+    이전 동작: `nl_write_converted` 만 남고 후속 audit 없음 → chain dangling.
+    기대 동작: `nl_write_dup_ignored` 1줄 추가 → 다운스트림 분석 가능.
+    """
+
+    def test_duplicate_emits_dup_ignored_audit(
+        self, queue, sessions, fake_say, logger, isolate_audit
+    ):
+        runtime = _make_runtime()
+        rate_limiter = _RateLimiter()
+        with mock.patch(
+            "ai.dev_relay.write_runtime.is_sdk_available", return_value=True
+        ), mock.patch(
+            "ai.dev_relay.main._build_and_send_write_confirm"
+        ):
+            for i in range(2):
+                _handle_command(
+                    text="PR 32 patch 적용",
+                    user_id="U0AE7A54NHL",
+                    event={
+                        "client_msg_id": "dup-chain-key",
+                        "ts": "1.1",
+                        "channel": "D1",
+                    },
+                    say=fake_say,
+                    logger=logger,
+                    queue=queue,
+                    rate_limiter=rate_limiter,
+                    sessions=sessions,
+                    nl_runtime=runtime,
+                )
+        records = [
+            json.loads(line)
+            for line in isolate_audit.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+        converted = [r for r in records if r.get("kind") == "nl_write_converted"]
+        handoff = [r for r in records if r.get("kind") == "nl_write_handoff"]
+        dup_ignored = [
+            r for r in records if r.get("kind") == "nl_write_dup_ignored"
+        ]
+        # 두 번 호출 → converted 2건 (분류·변환은 매번 수행).
+        assert len(converted) == 2
+        # 첫 번째는 handoff, 두 번째는 dup_ignored.
+        assert len(handoff) == 1
+        assert len(dup_ignored) == 1
+        # dup_ignored 라인이 tool / pr 컨텍스트 포함 (chain 추적 가능).
+        assert dup_ignored[0].get("tool") == "apply_patch"
+        assert dup_ignored[0].get("pr") == 32
+        # job_id 가 첫 번째 handoff 와 같다 (같은 row 유지).
+        assert dup_ignored[0].get("job_id") == handoff[0].get("job_id")
+
+
+class TestNLWriteConverterTimeout:
+    """PR #59 reviewer P1-3 — SDK 변환 호출 timeout.
+
+    `_handle_nl_write_conversion` 이 메시지 핸들러 thread 에서 `_nl_turn_lock`
+    보유 중 동기 호출하므로 SDK hang 시 NL 분기 영구 차단 위험. timeout 으로
+    상한을 두고, 초과 시 명시 audit + 사용자 안내 + 락 release.
+    """
+
+    def test_timeout_maps_to_timeout_reason(self):
+        """`WriteConverterTimeout` 이 `ConversionFailReason.TIMEOUT` 로 매핑."""
+        from ai.dev_relay.write_runtime import WriteConverterTimeout
+
+        def converter(_sys, _user):
+            raise WriteConverterTimeout("simulated")
+
+        result = convert("PR 32 patch", converter=converter)
+        assert isinstance(result, ConversionRejection)
+        assert result.reason is ConversionFailReason.TIMEOUT
+
+    def test_other_exception_still_parse_error(self):
+        """일반 예외는 기존대로 PARSE_ERROR fallback — 회귀 0."""
+        def converter(_sys, _user):
+            raise RuntimeError("sdk explosion")
+
+        result = convert("PR 32 patch", converter=converter)
+        assert isinstance(result, ConversionRejection)
+        assert result.reason is ConversionFailReason.PARSE_ERROR
+
+    def test_timeout_emits_audit_and_releases_lock(
+        self, queue, sessions, fake_say, logger, isolate_audit
+    ):
+        """end-to-end: 변환 timeout → audit reason=timeout + NL 락 release.
+
+        `_handle_command` 가 try/finally 로 lock 을 release 하므로 timeout 후에도
+        다음 NL turn 이 정상 진입 가능해야 한다.
+        """
+        from ai.dev_relay import main as main_mod
+        from ai.dev_relay.write_runtime import WriteConverterTimeout
+
+        runtime = _make_runtime(converter_raises=WriteConverterTimeout("hang"))
+        rate_limiter = _RateLimiter()
+        with mock.patch(
+            "ai.dev_relay.write_runtime.is_sdk_available", return_value=True
+        ), mock.patch(
+            "ai.dev_relay.main._build_and_send_write_confirm"
+        ) as build_send:
+            _handle_command(
+                text="PR 32 에 patch 적용",
+                user_id="U0AE7A54NHL",
+                event={
+                    "client_msg_id": "key-timeout-1",
+                    "ts": "1.1",
+                    "channel": "D1",
+                },
+                say=fake_say,
+                logger=logger,
+                queue=queue,
+                rate_limiter=rate_limiter,
+                sessions=sessions,
+                nl_runtime=runtime,
+            )
+        # confirm 발사 0건.
+        assert not build_send.called
+        # 모호 안내 발사 (timeout 도 사용자 입장에서는 변환 실패 안내).
+        texts = [s for s in fake_say.sent if isinstance(s, str)]
+        assert any("명확하게" in t for t in texts)
+        # audit: reason=timeout.
+        records = [
+            json.loads(line)
+            for line in isolate_audit.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+        failures = [
+            r for r in records if r.get("kind") == "nl_write_conversion_failed"
+        ]
+        assert failures
+        assert failures[-1].get("reason") == "timeout"
+        # NL 락 release 확인 — 즉시 acquire 가능해야.
+        assert main_mod._nl_turn_lock.acquire(blocking=False)
+        main_mod._nl_turn_lock.release()
+
+    def test_make_write_converter_wraps_timeout(self, monkeypatch):
+        """`make_write_converter` 가 `asyncio.wait_for` 로 timeout 감싸는지 검증.
+
+        SDK 미설치 환경에서도 단위 테스트 가능하도록 fake claude_agent_sdk 모듈을
+        주입한다.
+        """
+        import asyncio
+        import sys
+        import types
+
+        # fake claude_agent_sdk — query 가 영원히 sleep 하는 async generator.
+        fake_module = types.ModuleType("claude_agent_sdk")
+
+        class _AssistantMessage:
+            def __init__(self, content):
+                self.content = content
+
+        class _TextBlock:
+            def __init__(self, text):
+                self.text = text
+
+        class _ClaudeAgentOptions:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        async def _hang(*_args, **_kwargs):
+            # 영원히 sleep — wait_for 가 timeout 발생시켜야 함.
+            await asyncio.sleep(3600)
+            yield _AssistantMessage([_TextBlock("never")])
+
+        fake_module.AssistantMessage = _AssistantMessage
+        fake_module.TextBlock = _TextBlock
+        fake_module.ClaudeAgentOptions = _ClaudeAgentOptions
+        fake_module.query = _hang
+        monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_module)
+
+        from ai.dev_relay.write_runtime import (
+            WriteConverterTimeout,
+            make_write_converter,
+        )
+
+        converter = make_write_converter(timeout_seconds=0.05)
+        assert converter is not None
+        with pytest.raises(WriteConverterTimeout):
+            converter("system", "PR 32 patch")
