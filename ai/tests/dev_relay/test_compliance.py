@@ -33,6 +33,9 @@ PRD_AGENT_INTEGRATION_PATH = (
 PRD_SHELL_PIPE_ALLOW_PATH = (
     REPO_ROOT / "docs" / "prd" / "dev-relay-shell-pipe-allow.md"
 )
+PRD_WRITE_TOOLS_PATH = (
+    REPO_ROOT / "docs" / "prd" / "dev-relay-write-tools.md"
+)
 DEV_RELAY_DIR = REPO_ROOT / "ai" / "dev_relay"
 
 
@@ -76,6 +79,8 @@ _STATIC_TEMPLATES = (
     # PRD `dev-relay-agent-integration.md` 신규 템플릿.
     ("TEMPLATE_MERGE_CARVE_OUT_NOTICE", slack_renderer.TEMPLATE_MERGE_CARVE_OUT_NOTICE),
     ("TEMPLATE_REVIEW_DETAIL_LOOKUP_FAILED", slack_renderer.TEMPLATE_REVIEW_DETAIL_LOOKUP_FAILED),
+    # PR #43 reviewer P2-1 후속 신규 템플릿.
+    ("TEMPLATE_RESTART_APPROVAL_REJECTED", slack_renderer.TEMPLATE_RESTART_APPROVAL_REJECTED),
     ("TEMPLATE_FAIL_DESTRUCTIVE_BLOCKED", slack_renderer.TEMPLATE_FAIL_DESTRUCTIVE_BLOCKED),
     ("TEMPLATE_FAIL_SDK_TIMEOUT", slack_renderer.TEMPLATE_FAIL_SDK_TIMEOUT),
     ("TEMPLATE_FAIL_GITHUB_UNAUTHORIZED", slack_renderer.TEMPLATE_FAIL_GITHUB_UNAUTHORIZED),
@@ -237,6 +242,16 @@ def test_prd_shell_pipe_allow_body_outside_code_is_clean():
     matched = find_forbidden_keywords(body)
     assert matched == [], (
         f"shell pipe 허용 PRD 본문에 도메인 키워드가 노출되어 있습니다: {matched}"
+    )
+
+
+def test_prd_write_tools_body_outside_code_is_clean():
+    """write 도구 PRD 산문 검사 (AC-WT-14)."""
+    text = PRD_WRITE_TOOLS_PATH.read_text(encoding="utf-8")
+    body = _strip_code_blocks(text)
+    matched = find_forbidden_keywords(body)
+    assert matched == [], (
+        f"write 도구 PRD 본문에 도메인 키워드가 노출되어 있습니다: {matched}"
     )
 
 

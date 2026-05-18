@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -61,10 +62,12 @@ from ai.dev_relay.failures import (
 )
 from ai.dev_relay.merger import (
     MERGE_STRATEGY,
+    REJECTION_REASON_RESTART_NO_EXPECTED,
     ApprovalContext,
     MergeOutcome,
     MergeRejection,
     MergeWorker,
+    classify_merge_rejection,
     classify_merge_stderr,
     extract_sha,
     perform_merge,
@@ -85,16 +88,33 @@ from ai.dev_relay.reviewer import (
 from ai.dev_relay.slack_renderer import (
     FALLBACK_RESPONSE,
     TEMPLATE_CANCEL_NOTICE,
+    TEMPLATE_COMMIT_CREATED,
+    TEMPLATE_COMMIT_EMPTY_TREE,
     TEMPLATE_DESTRUCTIVE_BLOCKED,
     TEMPLATE_MERGE_CARVE_OUT_NOTICE,
+    TEMPLATE_PATCH_APPLIED,
+    TEMPLATE_PATCH_APPLY_FAILED,
+    TEMPLATE_PUSH_DONE,
+    TEMPLATE_PUSH_REJECTED,
     TEMPLATE_QUEUE_ACCEPTED_MERGE,
     TEMPLATE_QUEUE_ACCEPTED_REVIEW,
     TEMPLATE_QUEUE_BUSY,
     TEMPLATE_RATE_LIMIT,
+    TEMPLATE_RESTART_APPROVAL_REJECTED,
     TEMPLATE_REVIEW_DETAIL_LOOKUP_FAILED,
     TEMPLATE_UNKNOWN_COMMAND,
+    TEMPLATE_WRITE_COMPLIANCE_BLOCKED,
+    TEMPLATE_WRITE_DESTRUCTIVE_BLOCKED,
+    TEMPLATE_WRITE_QUEUE_ACCEPTED_COMMIT,
+    TEMPLATE_WRITE_QUEUE_ACCEPTED_PATCH,
+    TEMPLATE_WRITE_QUEUE_ACCEPTED_PUSH,
+    TEMPLATE_WRITE_SDK_UNAVAILABLE,
+    TEMPLATE_WRITE_SHUTDOWN_NOTICE,
+    build_commit_confirm_blocks,
     build_merge_confirm_blocks,
     build_merge_result_text,
+    build_patch_confirm_blocks,
+    build_push_confirm_blocks,
     build_review_result_blocks,
     build_status_text,
     guard_text_with_urls,
@@ -111,10 +131,69 @@ _RATE_LIMIT_MAX = 3  # 4번째 시도부터 차단.
 # graceful shutdown — 진행 중 job 대기 timeout (AC-8).
 _SHUTDOWN_TIMEOUT_S = 30.0
 
+# PRD `dev-relay-nl-serialize.md` §3.1 — 자연어 분기 process-wide 직렬화.
+# 모듈 스코프 단일 mutex. `_handle_natural_language` 진입 직후 acquire(blocking=False)
+# 로 락 획득을 시도하고, 실패하면 즉시 거절 안내(`TEMPLATE_NL_BUSY`) 1줄 발사 + 반환.
+# `try/finally` 로 release 강제 — 미release 회귀가 발생하면 데몬의 자연어 분기 전체가
+# 영구 차단되므로 보수적으로 finally 절 필수 (§7 위험 1번).
+_nl_turn_lock: threading.Lock = threading.Lock()
+
+# PRD §3.5 — shutdown 보호. flag set 이후 새 진입은 락 획득 시도 이전에 즉시 거절.
+# 진행 중 1건은 graceful 종료 (응답 발사 + 세션 갱신 + audit 기록 완료 후 release).
+_nl_shutdown_flag: threading.Event = threading.Event()
+
+# PRD `dev-relay-write-tools.md` §3.6 — write 도구 shutdown 보호.
+# flag set 이후 새 write 명령 진입을 즉시 거절. 진행 중 atomic op (apply/commit)
+# 은 graceful 종료, push 는 watchdog timeout 정책.
+_write_shutdown_flag: threading.Event = threading.Event()
+
+# PRD §3.2 — busy 시 사용자에게 발사할 안내 1줄. 한국어 1줄 (20~60자), 컴플라이언스 0 hit.
+# 발사 직전 `guard_text_with_urls` 이중 가드를 거친다.
+TEMPLATE_NL_BUSY: str = "지금 다른 요청을 처리 중이에요. 잠시 후 다시 보내주세요."
+
 
 def _audit_log_path() -> Path:
     """audit.jsonl 위치 (PRD §3.6)."""
     return default_db_path().parent / "audit.jsonl"
+
+
+# PR #54 reviewer P1 #1 — write 도구 cwd 명시 주입.
+# 데몬 시작 디렉터리 의존을 피하기 위해 본 헬퍼가 단일 진실원.
+# 우선순위: `DEV_RELAY_REPO_ROOT` 환경변수 > git rev-parse --show-toplevel > os.getcwd().
+# 한 번 계산되면 process lifetime 동안 캐시 — 데몬 재시작 시 재계산.
+_repo_root_cache: Path | None = None
+
+
+def _resolve_repo_root() -> Path:
+    """write 도구가 사용할 repo 루트 디렉터리를 해석한다.
+
+    PR #54 reviewer P1 #1 후속 — cwd 미주입으로 잘못된 repo 에 patch 적용 위험을
+    제거하기 위한 헬퍼. 환경변수 명시값을 우선, 없으면 git toplevel, 그래도 없으면
+    현재 cwd 로 fallback.
+    """
+    global _repo_root_cache
+    if _repo_root_cache is not None:
+        return _repo_root_cache
+    env_value = (os.environ.get("DEV_RELAY_REPO_ROOT") or "").strip()
+    if env_value:
+        _repo_root_cache = Path(env_value).resolve()
+        return _repo_root_cache
+    try:
+        import subprocess as _sp
+        result = _sp.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=2.0,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            _repo_root_cache = Path(result.stdout.strip()).resolve()
+            return _repo_root_cache
+    except Exception:  # noqa: BLE001
+        pass
+    _repo_root_cache = Path(os.getcwd()).resolve()
+    return _repo_root_cache
 
 
 def _append_audit(record: dict[str, Any]) -> None:
@@ -123,6 +202,13 @@ def _append_audit(record: dict[str, Any]) -> None:
     PRD §3.8 — 신규 파일 생성 시 0600 권한 적용. 이미 존재하는 파일은 사용자가
     명시적으로 권한을 풀어둔 경우를 존중해 그대로 둔다 (강제로 좁히지 않음).
     부모 디렉터리(0700) 는 `JobQueue::_ensure_dir_secure` 가 보장한다.
+
+    canonical 키 정책 (PR #50):
+    - 사용자 컨텍스트가 있는 record 는 `"user_id_masked"` canonical 키를 포함.
+    - 기존 `"user"` 키는 back-compat 으로 병기 (다운스트림 분석 도구 회귀 0).
+    - `"user"` 키 deprecation 시점: **2026-07-13 이후** (PR #50 머지 2026-05-13
+      기준 60일 window). 그 시점에 다운스트림 분석 도구의 `"user_id_masked"`
+      마이그레이션 확인 후 `"user"` 키 제거 PR 별도 진행.
     """
     path = _audit_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -279,6 +365,7 @@ def _handle_command(
                 "ts": _now_kst(),
                 "kind": "destructive_blocked",
                 "user": masked,
+                "user_id_masked": masked,
             }
         )
         safe_say(say, TEMPLATE_DESTRUCTIVE_BLOCKED, logger, context="destructive")
@@ -344,6 +431,7 @@ def _handle_command(
             "ts": _now_kst(),
             "kind": "command_received",
             "user": masked,
+            "user_id_masked": masked,
             "cmd": parsed.normalized,
             "key": idempotency_key,
             "job_id": job.id,
@@ -393,6 +481,24 @@ def _handle_command(
         say(blocks=blocks, text=f"PR #{parsed.pr_number} 머지 승인을 기다립니다.")
         return
 
+    # PRD `dev-relay-write-tools.md` §3.2.3 — write 도구 3종.
+    if parsed.kind in (
+        CommandKind.APPLY_PATCH_PR,
+        CommandKind.COMMIT_PR,
+        CommandKind.PUSH_PR,
+    ) and parsed.pr_number is not None:
+        _handle_write_command(
+            kind=parsed.kind,
+            pr_number=parsed.pr_number,
+            idempotency_key=idempotency_key,
+            job_id=job.id,
+            event=event,
+            user_id=user_id,
+            say=say,
+            logger=logger,
+        )
+        return
+
 
 def _now_kst() -> str:
     from datetime import datetime, timedelta, timezone
@@ -414,6 +520,43 @@ def _extract_thread_ts(event: dict) -> tuple[str, str]:
     return thread_ts, channel_id
 
 
+def _emit_nl_busy_notice(
+    *,
+    say: Any,
+    thread_ts: str,
+    masked: str,
+    logger: logging.Logger,
+    reason: str,
+) -> None:
+    """busy 안내 1줄 발사 + `nl_busy_rejected` audit 1줄 기록.
+
+    PRD `dev-relay-nl-serialize.md` §3.2 + §3.4. 발사 직전 `guard_text_with_urls`
+    이중 가드를 거쳐 컴플라이언스 0 hit 을 보장한다. 가드 위반이면 fallback 으로
+    무발사 + 에러 로그 (외부 노출 사고 절대 금지).
+
+    `reason` 은 로그 식별용 — audit record 에는 포함하지 않는다 (스키마 일관성).
+    """
+    safe = guard_text_with_urls(TEMPLATE_NL_BUSY)
+    if find_forbidden_keywords(safe):
+        # 다중 layer 안전망 — 정적 검사로 0 hit 을 보장하지만 회귀 방어.
+        # 정책: 가드 위반 시 사용자 무발사 (audit 만 기록) — 컴플라이언스 우선,
+        # 외부 노출 사고 차단이 사용자 안내 손실보다 우선한다 (PR #48 reviewer P2-1).
+        logger.error("compliance: blocked busy notice", extra={"reason": reason})
+    else:
+        try:
+            say(safe, thread_ts=thread_ts)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("busy 안내 발사 실패 (%s)", type(exc).__name__)
+    _append_audit(
+        {
+            "ts": _now_kst(),
+            "kind": "nl_busy_rejected",
+            "thread_ts": thread_ts,
+            "user_id_masked": masked,
+        }
+    )
+
+
 def _handle_natural_language(
     *,
     text: str,
@@ -424,89 +567,820 @@ def _handle_natural_language(
     sessions: AgentSessionStore,
     nl_runtime: Any,
 ) -> None:
-    """자연어 분기 진입 (PRD `dev-relay-natural-language.md`).
+    """자연어 분기 진입 (PRD `dev-relay-natural-language.md` + `dev-relay-nl-serialize.md`).
 
     - 스레드 = 세션 매핑 (AC-6 / AC-7).
     - 30분 만료 후 재진입 시 안내 1라인 + 신규 세션 (AC-8).
     - run_turn 이 메시지 리스트를 반환 — 차례로 발사 (Block Kit 분할 포함).
     - audit 신규 kind 6종 자동 기록.
+
+    동시성 (PRD `dev-relay-nl-serialize.md` AC-NLS-1~9):
+    - 진입 직후 process-wide `_nl_turn_lock.acquire(blocking=False)`. 실패 시 즉시
+      `TEMPLATE_NL_BUSY` 1줄 발사 + `nl_busy_rejected` audit 1줄 + 반환. SDK 호출
+      0건. (큐 적재 없음 — 사용자가 잠시 후 재전송.)
+    - shutdown flag set 이후 새 진입은 락 획득 시도 이전에 즉시 거절. 진행 중 1건은
+      graceful 종료 (`try/finally` 로 release 강제).
+    - structured 분기와는 별도 락. 두 분기 동시 진행 가능 (§3.3).
     """
     masked = mask_user_id(user_id)
     thread_ts, channel_id = _extract_thread_ts(event)
 
-    # 만료 판정 + resume 결정.
-    existing = sessions.get(thread_ts=thread_ts, channel_id=channel_id)
-    resume_session_id: str | None = None
-    if existing is not None:
-        if is_expired(existing):
-            logger.info("session expired, restarting: thread_ts=%s", thread_ts)
-            # NL 분기 응답은 thread_ts 에 묶어 발사 — 사용자가 같은 스레드 답글로
-            # 후속 turn 을 보내면 session resume 가 발동된다 (PRD §3.3).
-            say(SESSION_RESTARTED_NOTICE, thread_ts=thread_ts)
-            # 만료된 세션은 신규 시작으로 간주 — resume 하지 않는다.
-            resume_session_id = None
-        else:
-            resume_session_id = existing.session_id
+    # PRD §3.5 — shutdown flag 가 set 된 이후 새 진입은 락 획득 시도 이전에 즉시 거절.
+    if _nl_shutdown_flag.is_set():
+        logger.info("nl: shutdown in progress, rejecting new entry: thread_ts=%s", thread_ts)
+        _emit_nl_busy_notice(
+            say=say, thread_ts=thread_ts, masked=masked, logger=logger, reason="shutdown",
+        )
+        return
 
-    def _audit(record: dict) -> None:
-        _append_audit(record)
+    # PRD §3.1 — process-wide 단일 mutex. blocking=False 로 즉시 거절 정책.
+    acquired = _nl_turn_lock.acquire(blocking=False)
+    if not acquired:
+        logger.info("nl: another turn in progress, rejecting: thread_ts=%s", thread_ts)
+        _emit_nl_busy_notice(
+            say=say, thread_ts=thread_ts, masked=masked, logger=logger, reason="busy",
+        )
+        return
 
-    # NL_AGENT_LOOP 진입.
-    result: AgentTurnResult = run_turn(
-        user_text=text,
-        user_id_masked=masked,
-        classifier=nl_runtime["classifier"],
-        haiku_responder=nl_runtime["haiku_responder"],
-        sonnet_responder=nl_runtime["sonnet_responder"],
-        resume_session_id=resume_session_id,
-        audit=_audit,
-        now_iso=_now_kst,
+    try:
+        # 만료 판정 + resume 결정.
+        existing = sessions.get(thread_ts=thread_ts, channel_id=channel_id)
+        resume_session_id: str | None = None
+        if existing is not None:
+            if is_expired(existing):
+                logger.info("session expired, restarting: thread_ts=%s", thread_ts)
+                # NL 분기 응답은 thread_ts 에 묶어 발사 — 사용자가 같은 스레드 답글로
+                # 후속 turn 을 보내면 session resume 가 발동된다 (PRD §3.3).
+                say(SESSION_RESTARTED_NOTICE, thread_ts=thread_ts)
+                # 만료된 세션은 신규 시작으로 간주 — resume 하지 않는다.
+                resume_session_id = None
+            else:
+                resume_session_id = existing.session_id
+
+        def _audit(record: dict) -> None:
+            _append_audit(record)
+
+        # NL_AGENT_LOOP 진입.
+        result: AgentTurnResult = run_turn(
+            user_text=text,
+            user_id_masked=masked,
+            classifier=nl_runtime["classifier"],
+            haiku_responder=nl_runtime["haiku_responder"],
+            sonnet_responder=nl_runtime["sonnet_responder"],
+            resume_session_id=resume_session_id,
+            audit=_audit,
+            now_iso=_now_kst,
+        )
+
+        # 세션 갱신: Sonnet 분기에서 session_id 반환 시 store 에 반영.
+        if result.sonnet_session_id:
+            if existing is None or is_expired(existing) or resume_session_id is None:
+                session = sessions.start(
+                    thread_ts=thread_ts,
+                    channel_id=channel_id,
+                    session_id=result.sonnet_session_id,
+                    model_used=MODEL_SONNET,
+                )
+                _append_audit(
+                    {
+                        "ts": _now_kst(),
+                        "kind": "session_started",
+                        "thread_ts": thread_ts,
+                        "session_id": session.session_id,
+                        "model": session.model_used,
+                        "user_id_masked": masked,
+                    }
+                )
+            else:
+                session = sessions.resume(
+                    thread_ts=thread_ts,
+                    channel_id=channel_id,
+                    model_used=MODEL_SONNET,
+                )
+                if session is not None:
+                    _append_audit(
+                        {
+                            "ts": _now_kst(),
+                            "kind": "session_resumed",
+                            "thread_ts": thread_ts,
+                            "session_id": session.session_id,
+                            "turn": session.turn_count,
+                            "user_id_masked": masked,
+                        }
+                    )
+
+        # 메시지 발사 — 차례로. Sonnet 분기는 Block Kit 분할로 다중 chunk 가능.
+        # NL 분기 응답은 항상 thread_ts 에 묶어 발사 — 사용자가 후속 답글을 같은
+        # 스레드에 보내면 session resume 가 발동된다. 데몬이 thread_ts 를 안 박으면
+        # 봇 응답이 top-level DM 메시지로 발사되어 사용자가 reply-in-thread UI 를
+        # 사용할 수 없고 매 turn 이 새 세션이 된다 (PRD §3.3 의도와 어긋남).
+        for message in result.messages:
+            # 발사 직전 한 번 더 가드 (다중 layer 안전망).
+            safe = guard_text_with_urls(message)
+            say(safe, thread_ts=thread_ts)
+    finally:
+        # PRD §3.1 + §7 위험 1번 — 정상/예외 모두 락 release 강제.
+        # 미release 회귀가 발생하면 데몬의 NL 분기 전체가 영구 차단된다.
+        _nl_turn_lock.release()
+
+
+# PRD `dev-relay-write-tools.md` §3.2 — write 도구 대기 컨텍스트.
+# job_id → (kind, pr_number, payload) 매핑. payload 는 도구별 dataclass.
+# confirm 버튼 클릭 시 본 매핑에서 컨텍스트를 lookup 해 실 작업을 수행.
+# in-memory + 데몬 lifetime 한정 (재시작 시 무효화 → 사용자 안내).
+_write_pending: dict[int, dict[str, Any]] = {}
+
+
+# PR #54 reviewer P2 #1 후속 — 진행 중 write worker 추적용 set.
+# `shutdown_dev_relay` 가 graceful 회수 (timeout 포함) 위해 사용.
+# daemon=True 특성상 프로세스 종료 시 강제 회수되지만, shutdown 함수가 호출되는
+# 경우에는 명시적 join 으로 진행 중 작업을 끝까지 수행할 기회를 준다 (timeout).
+_active_write_workers: set[threading.Thread] = set()
+_active_write_workers_lock = threading.Lock()
+
+
+# PR #54 reviewer P0 후속 — write 분기 SDK 호출 worker thread 진입점.
+# Slack 메시지 핸들러는 즉시 반환하고 SDK 호출은 daemon thread 에서 수행.
+# AgentRunner 와 별도 — picker 가 review job 용으로 쓰는 AgentRunner 와 race 가
+# 발생하지 않도록 본 worker 는 독립 thread 로 spawn 한다. user_id 단일·단일
+# 인스턴스 전제하에 동시 진행 가능 (각자 다른 job_id 로 격리).
+def _spawn_write_worker(
+    fn: Callable[[], None],
+    *,
+    job_id: int,
+    logger: logging.Logger,
+) -> threading.Thread:
+    """write SDK worker 를 daemon thread 로 spawn.
+
+    인자:
+    - `fn`: worker 본문 (no-arg callable). 호출 측이 closure 로 컨텍스트를 캡처.
+    - `job_id`: thread name 식별·로깅용.
+
+    반환된 thread 는 daemon=True — 데몬 process 종료 시 강제 회수된다. graceful
+    shutdown 은 `_write_shutdown_flag` set 으로 신규 진입을 차단하고,
+    `shutdown_dev_relay` 가 `_active_write_workers` 에 등록된 진행 중 thread 를
+    timeout 까지 join 한다 (PR #54 reviewer P2 #1 후속).
+    """
+    def _wrapped() -> None:
+        try:
+            fn()
+        finally:
+            with _active_write_workers_lock:
+                _active_write_workers.discard(threading.current_thread())
+
+    thread = threading.Thread(
+        target=_wrapped,
+        name=f"dev-relay-write-{job_id}",
+        daemon=True,
+    )
+    with _active_write_workers_lock:
+        _active_write_workers.add(thread)
+    thread.start()
+    logger.info("write worker spawned: job_id=%d", job_id)
+    return thread
+
+
+def _join_active_write_workers(
+    *,
+    timeout: float | None,
+    logger: logging.Logger | None = None,
+) -> None:
+    """진행 중 write worker thread 를 timeout 까지 join (PR #54 reviewer P2 #1 후속).
+
+    `_active_write_workers` set 의 snapshot 을 떠서 각 thread 를 join. timeout 이
+    None 이면 무기한 대기. timeout 이 주어지면 전체 budget 을 thread 수로 나눠
+    공평하게 배분 — 한 thread 가 hang 해도 다른 thread 가 join 기회 보장.
+    join 후에도 살아 있는 thread 는 daemon 특성상 process 종료 시 회수된다.
+    """
+    with _active_write_workers_lock:
+        snapshot = list(_active_write_workers)
+    if not snapshot:
+        return
+    if timeout is None:
+        per_thread: float | None = None
+    else:
+        # 안전 가드 — timeout 이 0 이하면 즉시 반환 (poll-only).
+        per_thread = max(timeout / len(snapshot), 0.0)
+    for thread in snapshot:
+        if not thread.is_alive():
+            continue
+        thread.join(timeout=per_thread)
+        if thread.is_alive() and logger is not None:
+            logger.warning(
+                "write worker join timeout: name=%s — daemon 강제 회수에 의존.",
+                thread.name,
+            )
+
+
+def _handle_write_command(
+    *,
+    kind: CommandKind,
+    pr_number: int,
+    idempotency_key: str,
+    job_id: int,
+    event: dict,
+    user_id: str,
+    say: Any,
+    logger: logging.Logger,
+) -> None:
+    """write 도구 명령 진입 (PRD §3.2 / AC-WT-2~4).
+
+    동작 순서:
+    1. shutdown flag 확인 → set 이면 즉시 거절.
+    2. SDK 가용성 확인 → 불가능하면 SDK 인증 안내.
+    3. 큐 적재 첫 응답(빠른 안내) 즉시 동기 발사 + `*_requested` audit 1줄.
+    4. SDK 호출 + dry-run preview + confirm 다이얼로그 발사는 daemon worker
+       thread 로 위임 (PR #54 reviewer P0 후속). Slack 메시지 핸들러는 3초 timeout
+       이전에 즉시 반환.
+
+    실제 도구 실행(`apply_patch`/`perform_commit`/`perform_push`) 은 confirm 버튼
+    클릭 시점에 별도 핸들러에서 수행 — 본 핸들러는 dry-run preview 발사까지만.
+
+    PR #54 reviewer P0 / P1 #4 후속 — 이전 구현은 SDK 호출을 동기 실행해 docstring
+    과 어긋났고 Slack 3초 timeout 위반 위험이 있었다. 본 버전은 첫 응답만 동기
+    발사하고 SDK 호출은 daemon thread 에 위임한다.
+    """
+    masked = mask_user_id(user_id)
+    thread_ts, channel_id = _extract_thread_ts(event)
+
+    # PRD §3.6 — shutdown flag 가 set 된 이후 새 write 명령은 즉시 거절.
+    if _write_shutdown_flag.is_set():
+        logger.info(
+            "write: shutdown in progress, rejecting new entry: thread_ts=%s",
+            thread_ts,
+        )
+        safe_say(
+            say,
+            TEMPLATE_WRITE_SHUTDOWN_NOTICE,
+            logger,
+            context="write_shutdown",
+        )
+        return
+
+    # PRD §3.4 — write 도구도 SDK 가용성 필요. SDK 미통과 시 graceful 안내.
+    try:
+        from ai.dev_relay.write_runtime import is_sdk_available
+        sdk_ok = is_sdk_available()
+    except ImportError:
+        sdk_ok = False
+    if not sdk_ok:
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "write_sdk_unavailable",
+                "job_id": job_id,
+                "pr": pr_number,
+                "user_id_masked": masked,
+            }
+        )
+        safe_say(
+            say,
+            TEMPLATE_WRITE_SDK_UNAVAILABLE,
+            logger,
+            context="write_sdk_unavailable",
+        )
+        return
+
+    # 큐 적재 첫 응답 안내.
+    if kind is CommandKind.APPLY_PATCH_PR:
+        accepted = TEMPLATE_WRITE_QUEUE_ACCEPTED_PATCH
+        audit_kind = "patch_requested"
+    elif kind is CommandKind.COMMIT_PR:
+        accepted = TEMPLATE_WRITE_QUEUE_ACCEPTED_COMMIT
+        audit_kind = "commit_requested"
+    else:  # PUSH_PR
+        accepted = TEMPLATE_WRITE_QUEUE_ACCEPTED_PUSH
+        audit_kind = "push_requested"
+
+    safe_say(
+        say,
+        accepted.format(pr_number=pr_number),
+        logger,
+        context=f"write_{kind.value}_accept",
     )
 
-    # 세션 갱신: Sonnet 분기에서 session_id 반환 시 store 에 반영.
-    if result.sonnet_session_id:
-        if existing is None or is_expired(existing) or resume_session_id is None:
-            session = sessions.start(
+    _append_audit(
+        {
+            "ts": _now_kst(),
+            "kind": audit_kind,
+            "job_id": job_id,
+            "pr": pr_number,
+            "user_id_masked": masked,
+        }
+    )
+
+    # PRD §3.2.3 — dry-run + confirm 다이얼로그.
+    # PR #54 reviewer P0 후속 — SDK 호출 + dry-run + confirm 발사는 daemon worker
+    # thread 로 위임. Slack 메시지 핸들러는 즉시 반환 (3초 timeout 이내).
+    # 본 worker 는 process lifetime 한정 — 데몬 shutdown 시 _write_shutdown_flag 가
+    # set 되면 신규 진입이 거절되고 진행 중 worker 는 graceful 종료까지 수행.
+    failed_audit_kind = audit_kind.replace("_requested", "_failed")
+
+    def _worker() -> None:
+        try:
+            _build_and_send_write_confirm(
+                kind=kind,
+                pr_number=pr_number,
+                idempotency_key=idempotency_key,
+                job_id=job_id,
+                user_id_masked=masked,
                 thread_ts=thread_ts,
                 channel_id=channel_id,
-                session_id=result.sonnet_session_id,
-                model_used=MODEL_SONNET,
+                say=say,
+                logger=logger,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "write command worker 처리 중 오류 — kind=%s job_id=%d",
+                kind.value,
+                job_id,
             )
             _append_audit(
                 {
                     "ts": _now_kst(),
-                    "kind": "session_started",
-                    "thread_ts": thread_ts,
-                    "session_id": session.session_id,
-                    "model": session.model_used,
+                    "kind": failed_audit_kind,
+                    "job_id": job_id,
+                    "pr": pr_number,
+                    "classification": "unknown_error",
+                    "user_id_masked": masked,
+                    "error": type(exc).__name__,
                 }
             )
-        else:
-            session = sessions.resume(
-                thread_ts=thread_ts,
-                channel_id=channel_id,
-                model_used=MODEL_SONNET,
+            safe_say(
+                say,
+                FALLBACK_RESPONSE,
+                logger,
+                context="write_command_error",
             )
-            if session is not None:
-                _append_audit(
-                    {
-                        "ts": _now_kst(),
-                        "kind": "session_resumed",
-                        "thread_ts": thread_ts,
-                        "session_id": session.session_id,
-                        "turn": session.turn_count,
-                    }
-                )
 
-    # 메시지 발사 — 차례로. Sonnet 분기는 Block Kit 분할로 다중 chunk 가능.
-    # NL 분기 응답은 항상 thread_ts 에 묶어 발사 — 사용자가 후속 답글을 같은
-    # 스레드에 보내면 session resume 가 발동된다. 데몬이 thread_ts 를 안 박으면
-    # 봇 응답이 top-level DM 메시지로 발사되어 사용자가 reply-in-thread UI 를
-    # 사용할 수 없고 매 turn 이 새 세션이 된다 (PRD §3.3 의도와 어긋남).
-    for message in result.messages:
-        # 발사 직전 한 번 더 가드 (다중 layer 안전망).
-        safe = guard_text_with_urls(message)
-        say(safe, thread_ts=thread_ts)
+    _spawn_write_worker(_worker, job_id=job_id, logger=logger)
+
+
+def _build_and_send_write_confirm(
+    *,
+    kind: CommandKind,
+    pr_number: int,
+    idempotency_key: str,
+    job_id: int,
+    user_id_masked: str,
+    thread_ts: str,
+    channel_id: str,
+    say: Any,
+    logger: logging.Logger,
+) -> None:
+    """SDK 호출 → dry-run preview → confirm Block Kit 발사 + pending 등록.
+
+    실 SDK 호출 결과는 `_write_pending[job_id]` 에 컨텍스트로 저장. confirm
+    버튼 핸들러가 lookup 해 실 작업을 수행.
+    """
+    from ai.dev_relay.write_runtime import (
+        make_commit_message_generator,
+        make_patch_generator,
+    )
+    from ai.dev_relay.write_tools import (
+        CommitMessageBlocked,
+        PatchDestructiveBlocked,
+        PushPolicyBlocked,
+        WriteToolError,
+        preview_commit,
+        preview_patch,
+        preview_push,
+    )
+
+    repo_root = _resolve_repo_root()
+    cwd_str = str(repo_root)
+
+    if kind is CommandKind.APPLY_PATCH_PR:
+        gen = make_patch_generator(cwd=cwd_str)
+        if gen is None:
+            safe_say(say, TEMPLATE_WRITE_SDK_UNAVAILABLE, logger, context="patch_no_sdk")
+            return
+        # patch 생성 요청 텍스트는 사용자 NL 컨텍스트 또는 PR 컨텍스트 기반.
+        # structured 진입에서는 PR diff 자체에 대한 일반 개선 요청으로 전달.
+        request_text = f"PR #{pr_number} 의 reviewer 발견 사항 또는 가벼운 개선을 반영하는 패치를 생성해 주세요."
+        try:
+            patch_text = gen(pr_number, request_text)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "patch generator 호출 실패 (%s)", type(exc).__name__
+            )
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "patch_failed",
+                    "job_id": job_id,
+                    "pr": pr_number,
+                    "classification": "unknown_error",
+                    "user_id_masked": user_id_masked,
+                }
+            )
+            safe_say(say, FALLBACK_RESPONSE, logger, context="patch_sdk_error")
+            return
+
+        try:
+            preview = preview_patch(patch_text)
+        except PatchDestructiveBlocked as exc:
+            logger.info("patch destructive blocked: %s", exc)
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "patch_failed",
+                    "job_id": job_id,
+                    "pr": pr_number,
+                    "classification": "write_destructive_blocked",
+                    "user_id_masked": user_id_masked,
+                }
+            )
+            safe_say(
+                say,
+                TEMPLATE_WRITE_DESTRUCTIVE_BLOCKED,
+                logger,
+                context="patch_destructive",
+            )
+            return
+        except WriteToolError as exc:
+            logger.info("patch preview failed: %s", exc)
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "patch_failed",
+                    "job_id": job_id,
+                    "pr": pr_number,
+                    "classification": "patch_apply_failed",
+                    "user_id_masked": user_id_masked,
+                }
+            )
+            safe_say(
+                say,
+                TEMPLATE_PATCH_APPLY_FAILED,
+                logger,
+                context="patch_preview_failed",
+            )
+            return
+
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "patch_generated",
+                "job_id": job_id,
+                "pr": pr_number,
+                "file_count": len(preview.files),
+                "lines_added": preview.lines_added,
+                "lines_removed": preview.lines_removed,
+                "user_id_masked": user_id_masked,
+            }
+        )
+
+        _write_pending[job_id] = {
+            "kind": "apply_patch",
+            "pr_number": pr_number,
+            "idempotency_key": idempotency_key,
+            "user_id_masked": user_id_masked,
+            "thread_ts": thread_ts,
+            "channel_id": channel_id,
+            "patch": preview.raw_patch,
+            "files": preview.files,
+            "cwd": str(repo_root),
+        }
+        blocks = build_patch_confirm_blocks(
+            pr_number=pr_number,
+            idempotency_key=idempotency_key,
+            job_id=job_id,
+            file_count=len(preview.files),
+            added=preview.lines_added,
+            removed=preview.lines_removed,
+        )
+        say(
+            blocks=blocks,
+            text=f"PR #{pr_number} 패치 적용 승인을 기다립니다.",
+        )
+        return
+
+    if kind is CommandKind.COMMIT_PR:
+        gen = make_commit_message_generator(cwd=cwd_str)
+        if gen is None:
+            safe_say(say, TEMPLATE_WRITE_SDK_UNAVAILABLE, logger, context="commit_no_sdk")
+            return
+        # 자동 메시지 생성 — staged 변경 요약은 SDK 가 도구로 직접 수집하도록 위임.
+        # MVP 에서는 일반 안내만 전달.
+        staged_summary = f"PR #{pr_number} 의 staged 변경을 한 줄로 요약."
+        try:
+            message = gen(staged_summary)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("commit msg gen 실패 (%s)", type(exc).__name__)
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "commit_failed",
+                    "job_id": job_id,
+                    "pr": pr_number,
+                    "classification": "unknown_error",
+                    "user_id_masked": user_id_masked,
+                }
+            )
+            safe_say(say, FALLBACK_RESPONSE, logger, context="commit_sdk_error")
+            return
+
+        try:
+            preview = preview_commit(message, cwd=repo_root, auto_stage=False)
+        except CommitMessageBlocked as exc:
+            logger.info("commit message blocked: %s", exc)
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "commit_failed",
+                    "job_id": job_id,
+                    "pr": pr_number,
+                    "classification": "compliance_blocked",
+                    "user_id_masked": user_id_masked,
+                }
+            )
+            safe_say(
+                say,
+                TEMPLATE_WRITE_COMPLIANCE_BLOCKED,
+                logger,
+                context="commit_compliance",
+            )
+            return
+        except WriteToolError as exc:
+            classification = (
+                "commit_empty_tree" if "empty" in str(exc) else "unknown_error"
+            )
+            logger.info("commit preview failed: %s", exc)
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "commit_failed",
+                    "job_id": job_id,
+                    "pr": pr_number,
+                    "classification": classification,
+                    "user_id_masked": user_id_masked,
+                }
+            )
+            if classification == "commit_empty_tree":
+                safe_say(say, TEMPLATE_COMMIT_EMPTY_TREE, logger, context="commit_empty")
+            else:
+                safe_say(say, FALLBACK_RESPONSE, logger, context="commit_preview_failed")
+            return
+
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "commit_message_generated",
+                "job_id": job_id,
+                "pr": pr_number,
+                "user_id_masked": user_id_masked,
+            }
+        )
+
+        _write_pending[job_id] = {
+            "kind": "commit",
+            "pr_number": pr_number,
+            "idempotency_key": idempotency_key,
+            "user_id_masked": user_id_masked,
+            "thread_ts": thread_ts,
+            "channel_id": channel_id,
+            "message": preview.message,
+            "cwd": str(repo_root),
+        }
+        blocks = build_commit_confirm_blocks(
+            pr_number=pr_number,
+            idempotency_key=idempotency_key,
+            job_id=job_id,
+            message=preview.message,
+            file_count=len(preview.staged_files),
+        )
+        say(
+            blocks=blocks,
+            text=f"PR #{pr_number} 커밋 승인을 기다립니다.",
+        )
+        return
+
+    # PUSH_PR
+    try:
+        preview = preview_push(cwd=repo_root)
+    except PushPolicyBlocked as exc:
+        logger.info("push policy blocked: %s", exc)
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "push_failed",
+                "job_id": job_id,
+                "pr": pr_number,
+                "classification": "write_destructive_blocked",
+                "user_id_masked": user_id_masked,
+            }
+        )
+        safe_say(
+            say,
+            TEMPLATE_WRITE_DESTRUCTIVE_BLOCKED,
+            logger,
+            context="push_policy",
+        )
+        return
+    except WriteToolError as exc:
+        logger.info("push preview failed: %s", exc)
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "push_failed",
+                "job_id": job_id,
+                "pr": pr_number,
+                "classification": "unknown_error",
+                "user_id_masked": user_id_masked,
+            }
+        )
+        safe_say(say, FALLBACK_RESPONSE, logger, context="push_preview_failed")
+        return
+
+    _write_pending[job_id] = {
+        "kind": "push",
+        "pr_number": pr_number,
+        "idempotency_key": idempotency_key,
+        "user_id_masked": user_id_masked,
+        "thread_ts": thread_ts,
+        "channel_id": channel_id,
+        "branch": preview.branch,
+        "remote": preview.remote,
+        "commits": preview.commit_shas,
+        "cwd": str(repo_root),
+    }
+    blocks = build_push_confirm_blocks(
+        pr_number=pr_number,
+        idempotency_key=idempotency_key,
+        job_id=job_id,
+        branch=preview.branch,
+        remote=preview.remote,
+        commit_count=len(preview.commit_shas),
+    )
+    say(
+        blocks=blocks,
+        text=f"PR #{pr_number} 푸시 승인을 기다립니다.",
+    )
+
+
+def _execute_apply_patch(
+    *,
+    job_id: int,
+    pending: dict[str, Any],
+    say: Any,
+    logger: logging.Logger,
+) -> None:
+    """confirm 통과한 patch 적용 → audit + 결과 메시지."""
+    from ai.dev_relay.write_tools import apply_patch, WriteToolError
+
+    pr_number = pending["pr_number"]
+    user_id_masked = pending["user_id_masked"]
+
+    try:
+        applied = apply_patch(
+            pending["patch"], cwd=pending.get("cwd") or _resolve_repo_root()
+        )
+    except WriteToolError as exc:
+        logger.info("apply_patch 실패 (%s)", exc)
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "patch_failed",
+                "job_id": job_id,
+                "pr": pr_number,
+                "classification": "patch_apply_failed",
+                "user_id_masked": user_id_masked,
+            }
+        )
+        safe_say(say, TEMPLATE_PATCH_APPLY_FAILED, logger, context="patch_apply_failed")
+        return
+
+    _append_audit(
+        {
+            "ts": _now_kst(),
+            "kind": "patch_applied",
+            "job_id": job_id,
+            "pr": pr_number,
+            "files": list(applied),
+            "user_id_masked": user_id_masked,
+        }
+    )
+    safe_say(
+        say,
+        TEMPLATE_PATCH_APPLIED.format(pr_number=pr_number, file_count=len(applied)),
+        logger,
+        context="patch_applied",
+    )
+
+
+def _execute_commit(
+    *,
+    job_id: int,
+    pending: dict[str, Any],
+    say: Any,
+    logger: logging.Logger,
+) -> None:
+    """confirm 통과한 commit 수행 → audit + 결과 메시지."""
+    from ai.dev_relay.write_tools import perform_commit, WriteToolError
+
+    pr_number = pending["pr_number"]
+    user_id_masked = pending["user_id_masked"]
+
+    try:
+        sha = perform_commit(
+            pending["message"], cwd=pending.get("cwd") or _resolve_repo_root()
+        )
+    except WriteToolError as exc:
+        classification = (
+            "commit_empty_tree" if "empty" in str(exc) else "unknown_error"
+        )
+        logger.info("perform_commit 실패 (%s)", exc)
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "commit_failed",
+                "job_id": job_id,
+                "pr": pr_number,
+                "classification": classification,
+                "user_id_masked": user_id_masked,
+            }
+        )
+        if classification == "commit_empty_tree":
+            safe_say(say, TEMPLATE_COMMIT_EMPTY_TREE, logger, context="commit_empty")
+        else:
+            safe_say(say, FALLBACK_RESPONSE, logger, context="commit_exec_failed")
+        return
+
+    _append_audit(
+        {
+            "ts": _now_kst(),
+            "kind": "commit_created",
+            "job_id": job_id,
+            "pr": pr_number,
+            "sha": sha,
+            "user_id_masked": user_id_masked,
+        }
+    )
+    safe_say(
+        say,
+        TEMPLATE_COMMIT_CREATED.format(pr_number=pr_number, sha=sha or "(unknown)"),
+        logger,
+        context="commit_created",
+    )
+
+
+def _execute_push(
+    *,
+    job_id: int,
+    pending: dict[str, Any],
+    say: Any,
+    logger: logging.Logger,
+) -> None:
+    """confirm 통과한 push 수행 → audit + 결과 메시지."""
+    from ai.dev_relay.write_tools import perform_push, WriteToolError
+
+    pr_number = pending["pr_number"]
+    user_id_masked = pending["user_id_masked"]
+
+    try:
+        remote, branch = perform_push(
+            cwd=pending.get("cwd") or _resolve_repo_root(),
+            remote=pending.get("remote", "origin"),
+        )
+    except WriteToolError as exc:
+        classification = (
+            "push_rejected" if "rejected" in str(exc) else "unknown_error"
+        )
+        logger.info("perform_push 실패 (%s)", exc)
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "push_failed",
+                "job_id": job_id,
+                "pr": pr_number,
+                "classification": classification,
+                "user_id_masked": user_id_masked,
+            }
+        )
+        if classification == "push_rejected":
+            safe_say(say, TEMPLATE_PUSH_REJECTED, logger, context="push_rejected")
+        else:
+            safe_say(say, FALLBACK_RESPONSE, logger, context="push_exec_failed")
+        return
+
+    _append_audit(
+        {
+            "ts": _now_kst(),
+            "kind": "push_done",
+            "job_id": job_id,
+            "pr": pr_number,
+            "remote": remote,
+            "branch": branch,
+            "user_id_masked": user_id_masked,
+        }
+    )
+    safe_say(
+        say,
+        TEMPLATE_PUSH_DONE.format(pr_number=pr_number, remote=remote, branch=branch),
+        logger,
+        context="push_done",
+    )
 
 
 def build_app(
@@ -628,17 +1502,19 @@ def build_app(
     def handle_cancel_merge(ack: Any, body: dict, say: Any) -> None:
         ack()
         user_id = extract_action_user_id(body) or ""
+        masked = mask_user_id(user_id)
         if not is_allowed_sender(user_id, config.allowed_user_ids):
             logger.info(
                 "허용되지 않은 버튼 클릭을 무시했습니다 (user=%s)",
-                mask_user_id(user_id),
+                masked,
             )
             return
         _append_audit(
             {
                 "ts": _now_kst(),
                 "kind": "button_action",
-                "user": mask_user_id(user_id),
+                "user": masked,
+                "user_id_masked": masked,
                 "action": "cancel_merge",
             }
         )
@@ -648,17 +1524,19 @@ def build_app(
     def handle_approve_merge(ack: Any, body: dict, say: Any) -> None:
         ack()
         user_id = extract_action_user_id(body) or ""
+        masked = mask_user_id(user_id)
         if not is_allowed_sender(user_id, config.allowed_user_ids):
             logger.info(
                 "허용되지 않은 버튼 클릭을 무시했습니다 (user=%s)",
-                mask_user_id(user_id),
+                masked,
             )
             return
         _append_audit(
             {
                 "ts": _now_kst(),
                 "kind": "button_action",
-                "user": mask_user_id(user_id),
+                "user": masked,
+                "user_id_masked": masked,
                 "action": "approve_merge",
             }
         )
@@ -706,6 +1584,9 @@ def build_app(
             )
         except MergeRejection as exc:
             logger.warning("approve_merge 검증 실패: %s", exc)
+            # PR #51 후속 F-2 #1: 재시작 거절 / idempotency 불일치 / destructive 거절 등
+            # `MergeRejection` 사유를 세분화해 audit 에 기록. raw stderr 분류와 충돌하지
+            # 않도록 `classification` 키는 그대로 두고 `rejection_reason` 보조 키 신설.
             _append_audit(
                 {
                     "ts": _now_kst(),
@@ -713,14 +1594,26 @@ def build_app(
                     "job_id": payload.job_id,
                     "pr": payload.pr_number,
                     "classification": FailureClassification.UNKNOWN_ERROR.value,
+                    "rejection_reason": classify_merge_rejection(exc),
+                    "user_id_masked": masked,
                 }
             )
-            safe_say(
-                say,
-                user_message_for(FailureClassification.UNKNOWN_ERROR),
-                logger,
-                context="approve_validate_failed",
-            )
+            # PR #43 reviewer P2-1: 재시작 거절 케이스는 사용자 안내를 분기.
+            # 일반 검증 실패와 달리, 사용자에게 "리뷰 재요청" 액션을 안내한다.
+            if str(exc) == REJECTION_REASON_RESTART_NO_EXPECTED:
+                safe_say(
+                    say,
+                    TEMPLATE_RESTART_APPROVAL_REJECTED,
+                    logger,
+                    context="approve_validate_restart",
+                )
+            else:
+                safe_say(
+                    say,
+                    user_message_for(FailureClassification.UNKNOWN_ERROR),
+                    logger,
+                    context="approve_validate_failed",
+                )
             return
 
         _append_audit(
@@ -729,6 +1622,7 @@ def build_app(
                 "kind": "merge_started",
                 "job_id": approval.job_id,
                 "pr": approval.pr_number,
+                "user_id_masked": masked,
             }
         )
         try:
@@ -743,6 +1637,7 @@ def build_app(
                     "job_id": approval.job_id,
                     "pr": approval.pr_number,
                     "classification": classification.value,
+                    "user_id_masked": masked,
                 }
             )
             safe_say(
@@ -762,6 +1657,7 @@ def build_app(
                     "pr": approval.pr_number,
                     "sha": outcome.sha or "",
                     "strategy": MERGE_STRATEGY,
+                    "user_id_masked": masked,
                 }
             )
             safe_say(
@@ -785,6 +1681,7 @@ def build_app(
                     "job_id": approval.job_id,
                     "pr": approval.pr_number,
                     "classification": classification.value,
+                    "user_id_masked": masked,
                 }
             )
             safe_say(
@@ -798,17 +1695,19 @@ def build_app(
     def handle_merge_review(ack: Any, body: dict, say: Any) -> None:
         ack()
         user_id = extract_action_user_id(body) or ""
+        masked = mask_user_id(user_id)
         if not is_allowed_sender(user_id, config.allowed_user_ids):
             logger.info(
                 "허용되지 않은 버튼 클릭을 무시했습니다 (user=%s)",
-                mask_user_id(user_id),
+                masked,
             )
             return
         _append_audit(
             {
                 "ts": _now_kst(),
                 "kind": "button_action",
-                "user": mask_user_id(user_id),
+                "user": masked,
+                "user_id_masked": masked,
                 "action": "merge_review",
             }
         )
@@ -835,12 +1734,153 @@ def build_app(
             text=f"PR #{payload.pr_number} 머지 승인을 기다립니다.",
         )
 
+    # PRD `dev-relay-write-tools.md` §3.2.3 — write 도구 confirm 버튼 핸들러.
+    @app.action("apply_patch_confirm")
+    def handle_apply_patch_confirm(ack: Any, body: dict, say: Any) -> None:
+        ack()
+        action_user_id = extract_action_user_id(body) or ""
+        if not is_allowed_sender(action_user_id, config.allowed_user_ids):
+            return
+        action_value = _extract_action_value(body)
+        payload = parse_action_value_v2(action_value)
+        if payload is None:
+            safe_say(say, FALLBACK_RESPONSE, logger, context="patch_confirm_invalid")
+            return
+        pending = _write_pending.pop(payload.job_id, None)
+        if pending is None or pending.get("kind") != "apply_patch":
+            safe_say(
+                say,
+                TEMPLATE_WRITE_SHUTDOWN_NOTICE,
+                logger,
+                context="patch_confirm_missing",
+            )
+            return
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "patch_confirmed",
+                "job_id": payload.job_id,
+                "pr": payload.pr_number,
+                "action": "applied",
+                "user_id_masked": pending["user_id_masked"],
+            }
+        )
+        _execute_apply_patch(
+            job_id=payload.job_id, pending=pending, say=say, logger=logger
+        )
+
+    @app.action("commit_confirm")
+    def handle_commit_confirm(ack: Any, body: dict, say: Any) -> None:
+        ack()
+        action_user_id = extract_action_user_id(body) or ""
+        if not is_allowed_sender(action_user_id, config.allowed_user_ids):
+            return
+        action_value = _extract_action_value(body)
+        payload = parse_action_value_v2(action_value)
+        if payload is None:
+            safe_say(say, FALLBACK_RESPONSE, logger, context="commit_confirm_invalid")
+            return
+        pending = _write_pending.pop(payload.job_id, None)
+        if pending is None or pending.get("kind") != "commit":
+            safe_say(
+                say,
+                TEMPLATE_WRITE_SHUTDOWN_NOTICE,
+                logger,
+                context="commit_confirm_missing",
+            )
+            return
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "commit_confirmed",
+                "job_id": payload.job_id,
+                "pr": payload.pr_number,
+                "action": "committed",
+                "user_id_masked": pending["user_id_masked"],
+            }
+        )
+        _execute_commit(
+            job_id=payload.job_id, pending=pending, say=say, logger=logger
+        )
+
+    @app.action("push_confirm")
+    def handle_push_confirm(ack: Any, body: dict, say: Any) -> None:
+        ack()
+        action_user_id = extract_action_user_id(body) or ""
+        if not is_allowed_sender(action_user_id, config.allowed_user_ids):
+            return
+        action_value = _extract_action_value(body)
+        payload = parse_action_value_v2(action_value)
+        if payload is None:
+            safe_say(say, FALLBACK_RESPONSE, logger, context="push_confirm_invalid")
+            return
+        pending = _write_pending.pop(payload.job_id, None)
+        if pending is None or pending.get("kind") != "push":
+            safe_say(
+                say,
+                TEMPLATE_WRITE_SHUTDOWN_NOTICE,
+                logger,
+                context="push_confirm_missing",
+            )
+            return
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "push_confirmed",
+                "job_id": payload.job_id,
+                "pr": payload.pr_number,
+                "action": "pushed",
+                "user_id_masked": pending["user_id_masked"],
+            }
+        )
+        _execute_push(
+            job_id=payload.job_id, pending=pending, say=say, logger=logger
+        )
+
+    @app.action("cancel_write")
+    def handle_cancel_write(ack: Any, body: dict, say: Any) -> None:
+        """write 도구 confirm `[취소]` (AC-WT-6)."""
+        ack()
+        action_user_id = extract_action_user_id(body) or ""
+        masked = mask_user_id(action_user_id)
+        if not is_allowed_sender(action_user_id, config.allowed_user_ids):
+            return
+        action_value = _extract_action_value(body)
+        payload = parse_action_value_v2(action_value)
+        if payload is None:
+            safe_say(say, TEMPLATE_CANCEL_NOTICE, logger, context="cancel_write_invalid")
+            return
+        pending = _write_pending.pop(payload.job_id, None)
+        kind_label = pending.get("kind") if pending else "unknown"
+        if kind_label == "apply_patch":
+            confirm_kind = "patch_confirmed"
+        elif kind_label == "commit":
+            confirm_kind = "commit_confirmed"
+        elif kind_label == "push":
+            confirm_kind = "push_confirmed"
+        else:
+            confirm_kind = "write_cancelled"
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": confirm_kind,
+                "job_id": payload.job_id,
+                "pr": payload.pr_number,
+                "action": "cancelled",
+                "user_id_masked": masked,
+            }
+        )
+        safe_say(say, TEMPLATE_CANCEL_NOTICE, logger, context="cancel_write")
+
     @app.action("view_details")
     def handle_view_details(ack: Any, body: dict, say: Any) -> None:
         ack()
         user_id = extract_action_user_id(body) or ""
         if not is_allowed_sender(user_id, config.allowed_user_ids):
             return
+        # PR #52 reviewer P2 #3 후속 — 다른 핸들러와 mask_user_id 호출 패턴
+        # 통일 (1회 계산 후 재사용).
+        masked = mask_user_id(user_id)
         # PRD `dev-relay-agent-integration.md` §3.2 — 캐시 lookup.
         action_value = _extract_action_value(body)
         payload = parse_action_value_v2(action_value)
@@ -860,6 +1900,7 @@ def build_app(
                     "kind": "reviewer_detail_lookup_failed",
                     "job_id": payload.job_id,
                     "pr": payload.pr_number,
+                    "user_id_masked": masked,
                 }
             )
             safe_say(
@@ -910,6 +1951,38 @@ def _install_interrupt_handlers(logger: logging.Logger) -> None:
         register(_sig.SIGTERM, _shutdown)
     except (ValueError, AttributeError):
         pass
+
+
+def shutdown_dev_relay(
+    runner: AgentRunner,
+    *,
+    timeout: float | None = _SHUTDOWN_TIMEOUT_S,
+    logger: logging.Logger | None = None,
+) -> None:
+    """데몬 shutdown 진입점 — NL flag + write flag set + AgentRunner.shutdown 위임.
+
+    PRD `dev-relay-nl-serialize.md` §3.5 + PR #48 reviewer P2-2 후속 +
+    `dev-relay-write-tools.md` §3.6 (write 도구 shutdown 보호).
+
+    호출 순서:
+    1. `_nl_shutdown_flag.set()` — 신규 NL 진입 거절 (락 acquire 시도 이전).
+       진행 중 1건은 `try/finally` 로 graceful 종료.
+    2. `_write_shutdown_flag.set()` — 신규 write 명령 진입 거절. confirm 대기
+       작업은 _write_pending 에 남지만 다음 시작 시 무효화 안내.
+    3. `_join_active_write_workers(timeout=...)` — 진행 중 write daemon thread 를
+       timeout 까지 graceful join (PR #54 reviewer P2 #1 후속).
+    4. `runner.shutdown(wait=True, timeout=timeout)` — worker 큐 graceful 종료.
+
+    flag set 은 idempotent (`threading.Event.set` 자체가 이미 set 상태면 no-op)
+    이라 다중 호출 안전. 본 함수는 `run()` 의 finally 절에서 호출되며 직접 호출도
+    가능 (`AgentRunner.shutdown` 시그니처는 그대로 유지 — 외부 호출 측 회귀 0).
+    """
+    _nl_shutdown_flag.set()
+    _write_shutdown_flag.set()
+    if logger is not None:
+        logger.info("NL/write 분기 shutdown flag set — 신규 진입 거절 시작.")
+    _join_active_write_workers(timeout=timeout, logger=logger)
+    runner.shutdown(wait=True, timeout=timeout)
 
 
 def _build_nl_runtime(logger: logging.Logger) -> dict[str, Any] | None:
@@ -1001,6 +2074,7 @@ def _build_review_job_handler(
                 "kind": "reviewer_started",
                 "job_id": job.id,
                 "pr": pr_number,
+                "user_id_masked": mask_user_id(job.user_id),
             }
         )
 
@@ -1013,6 +2087,7 @@ def _build_review_job_handler(
                     "job_id": job.id,
                     "pr": pr_number,
                     "classification": classification.value,
+                    "user_id_masked": mask_user_id(job.user_id),
                 }
             )
             _post_to_thread(
@@ -1037,6 +2112,7 @@ def _build_review_job_handler(
                     "job_id": job.id,
                     "pr": pr_number,
                     "classification": classification.value,
+                    "user_id_masked": mask_user_id(job.user_id),
                 }
             )
             _post_to_thread(
@@ -1057,6 +2133,7 @@ def _build_review_job_handler(
                     "job_id": job.id,
                     "pr": pr_number,
                     "classification": classification.value,
+                    "user_id_masked": mask_user_id(job.user_id),
                 }
             )
             _post_to_thread(
@@ -1077,6 +2154,7 @@ def _build_review_job_handler(
                     "job_id": job.id,
                     "pr": pr_number,
                     "classification": classification.value,
+                    "user_id_masked": mask_user_id(job.user_id),
                 }
             )
             _post_to_thread(
@@ -1099,6 +2177,7 @@ def _build_review_job_handler(
                 "pr": pr_number,
                 "duration_s": duration_s,
                 "finding_count": len(findings),
+                "user_id_masked": mask_user_id(job.user_id),
             }
         )
 
@@ -1162,6 +2241,78 @@ def _post_to_thread(
         logger.warning("chat_postMessage 실패 (%s)", type(exc).__name__)
 
 
+# Block Kit 에서 사용자 노출 가능한 비-text 키 (PR #51 reviewer P2 #3 후속).
+# `text`/`fields[].text`/`accessory.text.text` 외에 미래 블록 도입 시 누설 위험이
+# 있는 키들을 정적으로 나열. 현재 호출 경로 (`build_review_result_blocks`) 에서는
+# 발생하지 않으나 회귀 안전망으로 미리 보강한다.
+_BLOCK_USER_FACING_NON_TEXT_KEYS: frozenset[str] = frozenset(
+    {
+        "alt_text",      # image 블록 / image element
+        "placeholder",   # plain_text_input / select 의 안내 텍스트 (str 또는 obj)
+        "title",         # image 블록 캡션 (str 또는 plain_text obj)
+        "label",         # input 블록 라벨 (plain_text obj)
+        "hint",          # input 블록 보조 설명 (plain_text obj)
+    }
+)
+
+
+def _collect_block_user_facing_text(blocks: Any) -> list[str]:
+    """Block Kit 트리에서 사용자 노출 가능한 텍스트 필드를 수집한다.
+
+    PR #43 reviewer P2-3 후속의 가드 보조 헬퍼. `text.text`, plain text value
+    등을 모은다. `action_id` / `block_id` / `value` 는 내부 식별자라 제외.
+
+    PR #51 reviewer P2 #2 후속: `key == "text"` 분기에서 inner 텍스트를 직접
+    수집한 뒤 같은 노드를 다시 재귀로 들어가지 않는다 (중복 수집 제거 — 동작
+    변경 0, 발사 차단 판정에 영향 없음).
+
+    PR #51 reviewer P2 #3 후속: `image.alt_text`, `input.placeholder.text`,
+    `actions.elements[].placeholder.text`, `title`, `label`, `hint` 등 비-text
+    키도 누설 위험이 있어 수집 대상에 포함. 현재 호출 경로에는 해당 블록이
+    없으므로 회귀 0, 미래 블록 도입 시 안전망 역할.
+    """
+    collected: list[str] = []
+
+    def _visit(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "text":
+                    # plain string text — 직접 수집 + 더 들어가지 않음 (중복 방지).
+                    if isinstance(value, str):
+                        collected.append(value)
+                        continue
+                    # text 객체 ({type, text} 형태) — inner 만 수집 + 재귀 생략.
+                    if isinstance(value, dict):
+                        inner = value.get("text")
+                        if isinstance(inner, str):
+                            collected.append(inner)
+                        # text 객체 내부에는 추가 노출 가치 키가 없으므로 재귀 생략.
+                        continue
+                if key in _BLOCK_USER_FACING_NON_TEXT_KEYS:
+                    # str 직접: image.alt_text 등.
+                    if isinstance(value, str):
+                        collected.append(value)
+                        continue
+                    # plain_text obj ({type, text}): title / label / hint /
+                    # placeholder 가 obj 형태일 때. PR #52 reviewer P2 #1 후속
+                    # — inner `text` 를 직접 수집한 뒤 `_visit(value)` 로
+                    # fallthrough 하면 같은 inner 가 dict 분기에서 한 번 더
+                    # 수집되는 중복이 발생. 무해하나 `count == 1` 보장 위해
+                    # continue 로 끊는다.
+                    if isinstance(value, dict):
+                        inner = value.get("text")
+                        if isinstance(inner, str):
+                            collected.append(inner)
+                        continue
+                _visit(value)
+        elif isinstance(node, list):
+            for item in node:
+                _visit(item)
+
+    _visit(blocks)
+    return collected
+
+
 def _post_blocks_to_thread(
     *,
     app: Any,
@@ -1171,12 +2322,55 @@ def _post_blocks_to_thread(
     text: str,
     logger: logging.Logger,
 ) -> None:
-    """Block Kit 메시지를 thread_ts 에 묶어 발사."""
+    """Block Kit 메시지를 thread_ts 에 묶어 발사.
+
+    PR #43 reviewer P2-3 후속: `blocks` 자체의 사용자 노출 텍스트도 발사 직전
+    한 번 더 정적 가드 통과. 호출 측 (`build_review_result_blocks`) 이 이미
+    `guard_text` 통과한 정상 경로는 회귀 0. 미래에 가드 미통과 blocks 가
+    실수로 흘러들어오면 발사 차단 + text-only fallback 발사로 누설을 막는다.
+    fallback `text` 인자도 `find_forbidden_keywords` 검사 통과 후 발사한다.
+    """
+    matched_in_blocks: list[str] = []
+    for chunk in _collect_block_user_facing_text(blocks):
+        matched = find_forbidden_keywords(chunk)
+        if matched:
+            matched_in_blocks.extend(matched)
+    if matched_in_blocks:
+        logger.error(
+            "compliance: blocked thread blocks post",
+            extra={"matched": sorted(set(matched_in_blocks))},
+        )
+        # blocks 누설 차단 + text-only fallback. fallback 문구도 별도 가드.
+        safe_fallback = (
+            FALLBACK_RESPONSE
+            if not find_forbidden_keywords(FALLBACK_RESPONSE)
+            else "응답 차단됨"
+        )
+        try:
+            app.client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=safe_fallback,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "chat_postMessage(blocks fallback) 실패 (%s)", type(exc).__name__
+            )
+        return
+
+    # `text` 인자(알림용 본문) 도 마지막 한 번 더 가드.
+    safe_text = text or ""
+    if find_forbidden_keywords(safe_text):
+        logger.error(
+            "compliance: blocked thread blocks post (text fallback)",
+            extra={"reason": "text"},
+        )
+        safe_text = FALLBACK_RESPONSE
     try:
         app.client.chat_postMessage(
             channel=channel,
             thread_ts=thread_ts,
-            text=text,
+            text=safe_text,
             blocks=blocks,
         )
     except Exception as exc:  # noqa: BLE001
@@ -1312,7 +2506,8 @@ def run() -> int:
         except Exception:  # noqa: BLE001
             pass
         try:
-            runner.shutdown(wait=True, timeout=_SHUTDOWN_TIMEOUT_S)
+            # PR #48 reviewer P2-2 후속 — NL flag set + AgentRunner.shutdown 통합.
+            shutdown_dev_relay(runner, timeout=_SHUTDOWN_TIMEOUT_S, logger=logger)
         except Exception:  # noqa: BLE001
             pass
         logger.info("Dev Manager 데몬을 정리했습니다.")
@@ -1322,34 +2517,39 @@ def run() -> int:
 def _build_reviewer(logger: logging.Logger) -> ReviewerCallable | None:
     """reviewer SDK callable 을 구성.
 
-    PRD `dev-relay-agent-integration.md` §3.2 — Claude Agent SDK 신규 세션으로
-    PR diff + 리뷰 instruction 을 prompt 로 전달. 실 SDK 호출 자체는 nl_sdk_runtime
-    의 패턴을 그대로 답습 — SDK import 실패 시 None 반환 (reviewer 비활성).
+    PRD `dev-relay-write-tools.md` §3.1 (F-3 wire 완수) — `nl_sdk_runtime` 패턴
+    재사용. `write_runtime.make_reviewer_callable` 이 SDK import 실패·인증 실패
+    시 None 을 반환하면 reviewer 비활성으로 graceful degradation.
 
-    본 함수는 환경 미설정 환경에서 데몬 시작을 막지 않는 것이 목적. 실제 SDK
-    호출 구현은 후속 PR 에서 nl_sdk_runtime 와 동일 진입점을 거쳐 보강된다.
-    현 단계에서는 SDK runtime 이 import 불가하면 picker 가 reviewer=None 으로
-    빈 fallback 을 발사한다 (사용자에게 unknown_error 안내).
+    인증·credential 정책 (PRD §3.1.4):
+    - 구독 모드 우선 (`ANTHROPIC_API_KEY` 미설정 시 `claude` CLI 인증 승계).
+    - API 키 모드 fallback (`sk-ant-` prefix 검증 후 사용).
+    - 두 모드 모두 실패 시 graceful degradation — reviewer 비활성, 데몬 시작은
+      계속. write 도구 호출 시점에 사용자에게 명확한 안내.
     """
     try:
-        # SDK 가 설치돼 있는지만 확인 — 실 호출 callable 은 후속 단계에서.
-        importlib.import_module("claude_agent_sdk")
-    except ImportError:
+        from ai.dev_relay.write_runtime import (
+            is_sdk_available,
+            make_reviewer_callable,
+        )
+    except ImportError as exc:
         logger.warning(
-            "Claude Agent SDK import 실패 — reviewer 비활성. 큐 적재만 가능."
+            "write_runtime import 실패 (%s) — reviewer 비활성", type(exc).__name__
         )
         return None
 
-    def _reviewer(pr_number: int) -> ReviewResult:
-        # 현 단계 fallback — 실 SDK 호출 통합은 후속 단계에서 보강.
-        # 본 함수가 실제로 호출되는 흐름은 사용자 셋업(부록 A) + SDK 인증
-        # 모두 통과한 환경 한정. 미설정 환경에서는 위 ImportError 분기에서
-        # None 이 반환되어 본 callable 자체가 picker 에 전달되지 않는다.
-        raise NotImplementedError(
-            "reviewer SDK 호출 구현은 후속 단계에서 nl_sdk_runtime 패턴으로 추가 예정."
+    if not is_sdk_available():
+        logger.warning(
+            "Claude Agent SDK 인증 미통과 — reviewer 비활성. 큐 적재만 가능."
         )
+        return None
 
-    return _reviewer
+    callable_ = make_reviewer_callable()
+    if callable_ is None:
+        logger.warning("reviewer callable 생성 실패 — reviewer 비활성.")
+        return None
+    logger.info("reviewer SDK callable 준비 완료.")
+    return callable_
 
 
 def _build_merge_worker(logger: logging.Logger) -> MergeWorker | None:

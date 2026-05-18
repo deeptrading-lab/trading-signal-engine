@@ -74,14 +74,36 @@ class TestValidateApproval:
         with pytest.raises(MergeRejection):
             validate_approval(**kwargs)
 
-    def test_no_expected_relaxed(self):
-        # expected 가 None 이면 페이로드 자체만 검증. (예: 캐시 유실 후 fallback)
+    def test_expected_none_rejected_restart(self):
+        # PR #43 reviewer P2-1 후속: expected_* 가 None 이면 즉시 거절.
+        # 데몬 재시작 후 이전 세션 페이로드는 idempotency_key backstop 을 통과시킬
+        # 수 없으므로 검증 단계에서 막는다.
+        from ai.dev_relay.merger import REJECTION_REASON_RESTART_NO_EXPECTED
+
         kwargs = self._base_kwargs() | {
             "expected_idempotency_key": None,
             "expected_job_id": None,
         }
-        ctx = validate_approval(**kwargs)
-        assert ctx.pr_number == 22
+        with pytest.raises(MergeRejection) as exc_info:
+            validate_approval(**kwargs)
+        assert str(exc_info.value) == REJECTION_REASON_RESTART_NO_EXPECTED
+
+    def test_expected_idempotency_only_none_rejected(self):
+        # 한 쪽만 None 이어도 동일하게 거절.
+        from ai.dev_relay.merger import REJECTION_REASON_RESTART_NO_EXPECTED
+
+        kwargs = self._base_kwargs() | {"expected_idempotency_key": None}
+        with pytest.raises(MergeRejection) as exc_info:
+            validate_approval(**kwargs)
+        assert str(exc_info.value) == REJECTION_REASON_RESTART_NO_EXPECTED
+
+    def test_expected_job_id_only_none_rejected(self):
+        from ai.dev_relay.merger import REJECTION_REASON_RESTART_NO_EXPECTED
+
+        kwargs = self._base_kwargs() | {"expected_job_id": None}
+        with pytest.raises(MergeRejection) as exc_info:
+            validate_approval(**kwargs)
+        assert str(exc_info.value) == REJECTION_REASON_RESTART_NO_EXPECTED
 
 
 class TestPerformMerge:

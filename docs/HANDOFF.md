@@ -495,3 +495,280 @@
   > ## 우회 매트릭스 13건 통과 확인 (AC-PIPE-2)
   > 
 - **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
+
+### 2026-05-12 — feat(dev-relay): NL 분기 process-wide 직렬화 — threading.Lock 단일 인스턴스 (#48)
+
+- **slug**: `dev-relay-nl-serialize-impl` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/48
+- **요약**: feat(dev-relay): NL 분기 process-wide 직렬화 — threading.Lock 단일 인스턴스
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 개요
+  > 
+  > PRD [`docs/prd/dev-relay-nl-serialize.md`](../blob/main/docs/prd/dev-relay-nl-serialize.md) (#46) 의 옵션 C — process-wide 단일 mutex 직렬화 — 구현.
+  > 
+  > `_handle_natural_language` 진입 직후 모듈 스코프 `threading.Lock` 을 `acquire(blocking=False)` 로 시도. 실패 시 즉시 안내 1줄 발사 + 거절 + `nl_busy_rejected` audit 1줄 기록. `try/finally` 로 release 강제.
+  > 
+  > ## 변경 파일
+  > 
+  > - `ai/dev_relay/main.py` (+145 / -64) — 모듈 스코프 락·flag·busy 안내 상수, `_emit_nl_busy_notice` 헬퍼, `_handle_natural_language` 가드 블록.
+  > - `ai/tests/dev_relay/test_handle_command_nl_serialize.py` (신규 +414) — AC-NLS-1~6, 9 + 예외 시 락 release 단위 테스트 9건.
+  > - `docs/SESSION_NOTES.md` (+46) — 2026-05-07 세션 entry 동봉 (정책: 단독 SESSION_NOTES PR 금지).
+  > 
+  > ## 수용 기준 매핑
+  > 
+  > | AC | 시나리오 | 테스트 |
+  > |---|---|---|
+  > | AC-NLS-1 | 같은 thread_ts 동시 두 NL — 두 번째 거절, SDK 1건 | `TestNLSerializeSameThread::test_concurrent_same_thread_second_rejected` |
+  > | AC-NLS-2 | 다른 thread_ts 동시 두 NL — 두 번째 거절 (process-wide) | `TestNLSerializeDifferentThread::test_concurrent_different_thread_second_rejected` |
+  > | AC-NLS-3 | turn 종료 후 재진입 정상 처리 | `TestNLSerializeSequential::test_sequential_second_call_succeeds` |
+  > | AC-NLS-4 | structured 진행 중 NL — 차단되지 않음 (별도 락) | `TestNLSerializeStructuredCoexist::test_structured_in_flight_does_not_block_nl` |
+  > | AC-NLS-5 | rate_limiter 우선 발동 — busy 미발사 | `TestNLSerializeRateLimitInterop::test_rate_limit_fires_first_no_busy` |
+  > | AC-NLS-6 | audit `nl_busy_rejected` 1줄 + 필드 정확히 4개 | `TestNLSerializeAudit::test_busy_audit_record_fields_exact` |
+  > | AC-NLS-7 | 컴플라이언스 정적 검사 0 hit | `test_compliance.py` (변경 없음, main.py 자동 커버) |
+  > | AC-NLS-8 | 기존 NL + structured 테스트 0 fail | `pytest ai/tests/dev_relay/` 489 passed |
+  > | AC-NLS-9 | shutdown — 진행 중 graceful, 새 진입 거절 | `TestNLSerializeShutdown` 2건 |
+  > | §7 위험1 | 예외 발생 시 락 release | `TestNLSerializeLockReleaseOnException::test_lock_released_when_sonnet_raises` |
+  > 
+  > ## 테스트 결과
+  > 
+  > ```
+- **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):
+  - 머지 후 1~2주 `nl_busy_rejected` 발생 빈도 모니터링 (PRD §6.3 / SESSION_NOTES follow-up 7번).
+  - 빈도가 높으면 옵션 A (`JobQueue` 통합) 또는 옵션 B (thread_ts 별 lock map) 재설계 — 후속 PRD.
+
+### 2026-05-12 — chore(dev-relay): NL shutdown flag wire — PR #48 reviewer P2 후속 (#49)
+
+- **slug**: `dev-relay-nl-shutdown-wire` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/49
+- **요약**: chore(dev-relay): NL shutdown flag wire — PR #48 reviewer P2 후속
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 배경
+  > 
+  > PR #48 (`dev-relay-nl-serialize` impl, commit `40efb0c`) 머지 직후 reviewer 가 남긴 P2 후속 메모 2건을 본 chore PR 로 처리. 자가 self-review 한계는 비범위 (별도 운영자 트랙).
+  > 
+  > reviewer 코멘트 원문:
+  > - **P2-1**: `_emit_nl_busy_notice` 가드 위반 fallback 시 audit 만 기록되고 사용자 무발사 — 의도된 안전망 (외부 노출 사고 우선 차단). 운영 모니터링에서 `compliance: blocked busy notice` 에러 로그 빈도 추적 권장.
+  > - **P2-2**: `_nl_shutdown_flag.set()` 호출 측 미통합 — `AgentRunner.shutdown` 와 묶는 후속 PR 필요.
+  > 
+  > ## 변경 사항
+  > 
+  > ### P2-2 본체 — NL shutdown wire (옵션 b 채택)
+  > 
+  > `ai/dev_relay/main.py` 에 통합 헬퍼 추가:
+  > 
+  > ```python
+  > def shutdown_dev_relay(runner, *, timeout, logger=None):
+  >     _nl_shutdown_flag.set()
+  >     if logger is not None:
+  >         logger.info("NL 분기 shutdown flag set — 신규 진입 거절 시작.")
+  >     runner.shutdown(wait=True, timeout=timeout)
+  > ```
+  > 
+  > `run()` 의 `finally` 절에서 기존 `runner.shutdown(...)` 직접 호출을 본 헬퍼로 단일화. 외부 시그니처 (`AgentRunner.shutdown`) 는 그대로 유지 — 회귀 0.
+  > 
+  > **옵션 비교**:
+  > - (a) `AgentRunner.shutdown` 내부에서 `_nl_shutdown_flag.set()` — 모듈 전역 의존 도입, 책임 분리 위반 → 거절
+  > - (b) 통합 헬퍼 `shutdown_dev_relay` (채택) — AgentRunner 책임 분리 유지 + NL flag set + 후속 정리를 같은 모듈에서 묶음
+  > - (c) OS SIGTERM/SIGINT 핸들러에서 둘 다 호출 — lifecycle 분기점이 늘어남, 직접 호출 경로 미커버 → 거절
+  > 
+  > ### P2-1 — 가드 위반 fallback 정책 명문화
+- **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):
+  - (없음 — 본 PR 머지 후 PR #48 reviewer P2-1·P2-2 종결)
+  - 별도 트랙은 SESSION_NOTES 2026-05-13 entry follow-up 표 참조 (A-3/A-4/A-5/B-1/B-2/C-1/C-2/C-3)
+
+### 2026-05-12 — chore(dev-relay): audit record 에 user_id_masked 누락 fix (#50)
+
+- **slug**: `dev-relay-audit-user-id` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/50
+- **요약**: chore(dev-relay): audit record 에 user_id_masked 누락 fix
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 배경
+  > 
+  > `ai/dev_relay/main.py` 의 `_append_audit` 호출 22 inline 블록 중 일부 audit kind 에 `user_id_masked` 필드가 누락되어 있어 audit 로그에서 사용자별 추적이 끊김. PR #25 reviewer Concern 후속으로 SESSION_NOTES.md follow-up 표 P2 항목에 4 세션 이월된 상태였음.
+  > 
+  > ## 식별 결과 (`_append_audit` inline 호출 분포)
+  > 
+  > | # | 위치 | kind | 사전 상태 |
+  > |---|------|------|-----------|
+  > | 1 | L293 | `destructive_blocked` | `"user"` 만 존재 → **fix** |
+  > | 2 | L359 | `command_received` | `"user"` 만 존재 → **fix** |
+  > | 3 | L460 | `nl_busy_rejected` | `user_id_masked` 이미 존재 (테스트 보장) |
+  > | 4 | L555 | `session_started` | 누락 → **fix** |
+  > | 5 | L571 | `session_resumed` | 누락 → **fix** |
+  > | 6 | L721 | `button_action`/cancel_merge | `"user"` 만 존재 → **fix** |
+  > | 7 | L741 | `button_action`/approve_merge | `"user"` 만 존재 → **fix** |
+  > | 8 | L793 | `merge_failed` (validate) | 누락 → **fix** |
+  > | 9 | L810 | `merge_started` | 누락 → **fix** |
+  > | 10 | L823 | `merge_failed` (exception) | 누락 → **fix** |
+  > | 11 | L841 | `merge_done` | 누락 → **fix** |
+  > | 12 | L865 | `merge_failed` (outcome) | 누락 → **fix** |
+  > | 13 | L891 | `button_action`/merge_review | `"user"` 만 존재 → **fix** |
+  > | 14 | L941 | `reviewer_detail_lookup_failed` | 누락 → **fix** |
+  > | 15 | L1107 | `reviewer_started` | 누락 → **fix** (picker 컨텍스트에 `job.user_id` 사용) |
+  > | 16 | L1118 | `reviewer_failed` (no runtime) | 누락 → **fix** |
+  > | 17 | L1142 | `reviewer_failed` (destructive) | 누락 → **fix** |
+  > | 18 | L1162 | `reviewer_failed` (timeout) | 누락 → **fix** |
+  > | 19 | L1182 | `reviewer_failed` (exception) | 누락 → **fix** |
+  > | 20 | L1203 | `reviewer_done` | 누락 → **fix** |
+  > | pass-through | L531, L1046 | NL agent / SDK hook callback | record 변수 경유 — `nl_agent.py` / `nl_sdk_runtime.py` 소관, 본 PR 범위 외 |
+  > 
+- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
+
+### 2026-05-12 — chore(dev-relay): PR #43 reviewer P2-1·P2-3 후속 — validate_approval 재시작 거절 + blocks 가드 (#51)
+
+- **slug**: `dev-relay-approval-guard-blocks` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/51
+- **요약**: chore(dev-relay): PR #43 reviewer P2-1·P2-3 후속 — validate_approval 재시작 거절 + blocks 가드
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 배경
+  > 
+  > PR #43 (`dev-relay-agent-integration`, merged `213ed69`) reviewer P2 후속 메모 3건 중 **P2-1 + P2-3 두 건**을 묶어 처리한다. P2-2 (reviewer NotImplementedError fallback) 는 reviewer wire 자체가 별도 큰 작업이라 본 PR 비범위.
+  > 
+  > [PR #43 review comment 인용](https://github.com/deeptrading-lab/trading-signal-engine/pull/43#issuecomment-4389053077):
+  > 
+  > ### P2-1 — `validate_approval(expected=None)` 재시작 후 fallback 약화
+  > 
+  > `ai/dev_relay/merger.py:83-89` 가 `expected_idempotency_key` / `expected_job_id` 가 `None` 이면 mismatch 검사를 skip 했음. 데몬 재시작 후 기존 reviewer 결과 메시지의 `[승인]` 클릭 시 `expected_approvals` 가 비어 `None` 으로 떨어져 idempotency_key backstop 을 통과시킬 수 없는 문제.
+  > 
+  > ### P2-3 — `_post_blocks_to_thread` 의 blocks 자체 정적 가드 미적용
+  > 
+  > `ai/dev_relay/main.py:1292` `_post_blocks_to_thread` 는 `text` 인자만 가드, `blocks` 의 부분 텍스트는 호출 측 (`build_review_result_blocks`) 의 `guard_text` 통과를 신뢰. 현 호출 경로상 안전하나, 미래 회귀 차단.
+  > 
+  > ## 채택 옵션 (a) 근거
+  > 
+  > - **P2-1 옵션 (a)**: `validate_approval` 내부에서 `expected_*` 가 None 이면 즉시 거절. 단일 정의 지점이라 회귀 안전, 호출 경로 1곳뿐.
+  >   - 호출 측 (`handle_approve_merge`) 에서 `MergeRejection` 메시지를 새 reason 상수 `REJECTION_REASON_RESTART_NO_EXPECTED` 와 비교해 사용자 안내를 분기 (`TEMPLATE_RESTART_APPROVAL_REJECTED`).
+  > - **P2-3 fallback 정책**: blocks 누설 발견 시 발사 차단 + text-only fallback (`FALLBACK_RESPONSE`) 1건 발사. `text` 인자도 마지막에 한 번 더 가드.
+  > 
+  > ## 변경 파일
+  > 
+  > - `ai/dev_relay/merger.py` — `validate_approval` 재시작 거절 로직 + `REJECTION_REASON_RESTART_NO_EXPECTED` 상수 추가
+  > - `ai/dev_relay/slack_renderer.py` — `TEMPLATE_RESTART_APPROVAL_REJECTED` 신규 (한국어 1줄, 컴플라이언스 0 hit)
+  > - `ai/dev_relay/main.py` — `handle_approve_merge` 의 분기 안내 + `_post_blocks_to_thread` blocks 정적 가드 + `_collect_block_user_facing_text` 헬퍼
+  > - `ai/tests/dev_relay/test_merger.py` — 기존 relaxed 테스트를 P2-1 거절 케이스로 전환 + 한 쪽만 None 도 거절 확인 2건 추가
+  > - `ai/tests/dev_relay/test_post_blocks_guard.py` (신규) — walker 단위 + blocks/text 가드 발사 차단 케이스 + 재시작 거절 통합 점검 (10 cases)
+  > - `ai/tests/dev_relay/test_compliance.py` — 신규 템플릿 정적 검사 등록
+  > 
+  > ## 테스트 결과
+- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
+
+### 2026-05-14 — chore(dev-relay): PR #50/#51 reviewer P2 후속 묶음 — audit canonical + classify + walker (#52)
+
+- **slug**: `dev-relay-audit-followups` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/52
+- **요약**: chore(dev-relay): PR #50/#51 reviewer P2 후속 묶음 — audit canonical + classify + walker
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 배경
+  > 
+  > PR #50 (audit `user_id_masked`) 와 PR #51 (validate_approval 재시작 거절 + blocks 가드) 의 reviewer P2 follow-up 7건을 묶어 처리.
+  > 
+  > **묶음 vs 분할 결정**: F-1 4건 + F-2 3건 모두 작은 변경 (대부분 docstring / 한 줄 추가 / 작은 함수 신설). reviewer 가 7건을 한 번에 봐도 부담이 분할 시 컨텍스트 전환 비용보다 낮다고 판단 → **1 PR 묶음 채택**.
+  > 
+  > ## 변경 사항
+  > 
+  > ### F-1 — PR #50 reviewer P2 4건 (audit user_id 후속)
+  > 
+  > 1. **SDK responder canonical 키 적용** (`ai/dev_relay/nl_agent.py` 6곳, `ai/dev_relay/nl_sdk_runtime.py` 2곳)
+  >    - `nl_agent.py`: `llm_invoked` x3, `llm_classified` x1, `llm_response_blocked` x2 에 `user_id_masked` 키 병기. 기존 `"user"` 키는 back-compat 유지.
+  >    - `nl_sdk_runtime.py`: PreToolUse hook 의 `tool_call` / `tool_denied` audit 에는 기존에 user 필드가 없었으므로 `user_id_masked` 만 신규 추가 (canonical 단일).
+  > 
+  > 2. **`target_kinds` 셋 갱신 의무 docstring 보강** (`test_audit_user_id_masked.py`)
+  >    - `TestAuditSchemaRegression` 클래스·메서드 docstring 에 "신규 audit kind 추가 시 본 셋도 함께 업데이트하라" 명시. 정적 스캔이 source-of-truth 와 동기화돼야 신규 kind 누락을 자동으로 잡는다.
+  > 
+  > 3. **`"user"` 키 deprecation 시점 명시** (`_append_audit` docstring)
+  >    - **2026-07-13 이후** (PR #50 머지 2026-05-13 기준 60일 window). 보수적으로 60일 채택. 실제 키 제거는 다운스트림 분석 도구 마이그레이션 확인 후 별도 PR (`D-1` 트랙).
+  > 
+  > 4. **`mask_user_id` 중복 호출 통일** (`main.py` `handle_cancel_merge` / `handle_approve_merge` / `handle_merge_review`)
+  >    - `masked = mask_user_id(user_id)` 변수 1회 계산 후 재사용. 총 9곳 중복 호출 제거. 동작 변경 0.
+  > 
+  > ### F-2 — PR #51 reviewer P2 3건 (approval guard 후속)
+  > 
+  > 1. **`merge_failed` audit classification 세분화** (`ai/dev_relay/merger.py`, `main.py`)
+  >    - 신규 상수 7개: `REJECTION_CATEGORY_RESTART_NO_EXPECTED` / `IDEMPOTENCY_MISMATCH` / `JOB_ID_MISMATCH` / `USER_NOT_ALLOWED` / `INVALID_PAYLOAD` / `UNEXPECTED_ACTION` / `OTHER`
+  >    - 신규 함수 `classify_merge_rejection(exc)` — `MergeRejection` 메시지를 카테고리 라벨로 정규화.
+  >    - `main.py` `handle_approve_merge` 의 `merge_failed` audit 에 `rejection_reason` 보조 키 추가. `classification: UNKNOWN_ERROR` 는 그대로 유지 — 두 차원을 분리해 분석 도구가 독립 카운트 가능 (enum 충돌 회피).
+  > 
+- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
+
+### 2026-05-14 — feat(dev-relay): Phase 2 write 도구 + reviewer SDK wire — apply patch · commit · push + F-3 (#54)
+
+- **slug**: `dev-relay-write-tools-impl` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/54
+- **요약**: feat(dev-relay): Phase 2 write 도구 + reviewer SDK wire — apply patch · commit · push + F-3
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 요약
+  > 
+  > PRD #53 (`docs/prd/dev-relay-write-tools.md`) 의 Phase 2 — write 도구 (apply patch · commit · push) + reviewer SDK callable wire (F-3) 통합 구현.
+  > 
+  > ## 변경 사항
+  > 
+  > ### 신규 모듈
+  > - `ai/dev_relay/write_tools.py` (517L) — apply patch / commit / push 코어 + destructive 가드 + dry-run preview
+  > - `ai/dev_relay/write_runtime.py` (334L) — SDK 호출 wrapper (`nl_sdk_runtime` 패턴 재사용)
+  > 
+  > ### 수정
+  > - `ai/dev_relay/main.py` — `_build_reviewer` 가 실 SDK callable 반환 (F-3 완수) + `_handle_write_command` / `_execute_*` / 버튼 핸들러 추가 + `_write_shutdown_flag` 도입
+  > - `ai/dev_relay/dispatcher.py` — `apply patch pr=N` · `commit pr=N` · `push pr=N` 라우팅 + destructive 표지 강화 (`rm -rf`, `--force`, `--amend`, `--no-verify`, `force-with-lease` 등)
+  > - `ai/dev_relay/slack_renderer.py` — write 도구 confirm Block Kit 빌더 + 13종 신규 템플릿 + 정적 가드 통과
+  > 
+  > ### 테스트
+  > - `ai/tests/dev_relay/test_write_tools.py` (40건) — destructive 가드 + preview/perform 단위
+  > - `ai/tests/dev_relay/test_dispatcher_write.py` (16건) — write 도구 명령 파싱
+  > - `ai/tests/dev_relay/test_reviewer_sdk_wire.py` (10건) — F-3 wire + 응답 파싱
+  > - `ai/tests/dev_relay/test_write_command_flow.py` (9건) — 명령 흐름 + shutdown · 멱등성 · rate limit · audit
+  > - `ai/tests/dev_relay/test_shutdown_dev_relay.py` (+1건) — write flag set 회귀
+  > 
+  > ## AC 매핑
+  > 
+  > | AC | 항목 | 구현 | 테스트 |
+  > |---|---|---|---|
+  > | AC-WT-1 | reviewer SDK callable wire (F-3) | `write_runtime.make_reviewer_callable` + `_build_reviewer` | `test_reviewer_sdk_wire.py` |
+  > | AC-WT-2 | apply patch 정상 흐름 | `_handle_write_command` + `apply_patch` + confirm | `test_write_tools.py::TestApplyPatch` |
+  > | AC-WT-3 | commit 정상 흐름 | `_execute_commit` + `perform_commit` | `test_write_tools.py::TestPerformCommit` |
+  > | AC-WT-4 | push 정상 흐름 | `_execute_push` + `perform_push` | `test_write_tools.py::TestPerformPush` |
+- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
+
+### 2026-05-15 — chore(dev-relay): PR #52/#54 reviewer P2 후속 묶음 — walker dedup · daemon join · force-with-lease · classify 방어 (#56)
+
+- **slug**: `dev-relay-pr52-54-followups` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/56
+- **요약**: chore(dev-relay): PR #52/#54 reviewer P2 후속 묶음 — walker dedup · daemon join · force-with-lease · classify 방어
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 배경
+  > 
+  > 본 chore PR 은 PR #52 (F-4) 와 PR #54 (F-5) 의 reviewer P2 follow-up 7건을 묶어 처리합니다. PR #52 패턴 그대로 묶음 진행.
+  > 
+  > PRD: 없음 (chore — 기존 PR reviewer 코멘트 후속).
+  > 
+  > ## F-4 — PR #52 reviewer P2 후속 (4건)
+  > 
+  > ### #1 walker dict-form 중복 수집 제거
+  > - `ai/dev_relay/main.py` `_collect_block_user_facing_text` 의 `_BLOCK_USER_FACING_NON_TEXT_KEYS` 분기에서 inner `text` 직접 수집 후 `continue` 누락 → `_visit(value)` fallthrough 로 dict 재귀가 같은 inner 를 한 번 더 수집. 무해하나 `count == 1` 보장 위해 `continue` 추가.
+  > - 회귀: `TestWalkerDictDedup` 3건.
+  > 
+  > ### #2 `"user"` 키 deprecation 시점 자동 가드
+  > - PR #50 docstring 의 `2026-07-13` 시점을 pytest 정적 날짜 비교로 감시. 도달 시 `pytest.fail` 하여 retire 작업이 자연 트리거.
+  > - CI 추가 없이 기존 pytest 흐름에 묶임 (부담 최소).
+  > - 회귀: `TestUserKeyDeprecationDateGuard`.
+  > 
+  > ### #3 `handle_view_details` `mask_user_id` 패턴 통일
+  > - `masked = mask_user_id(user_id)` 변수 1회 계산 후 재사용 (F-1 #4 패턴 그대로). 향후 추가 마스킹 호출 시 일관성 보장.
+  > 
+  > ### #4 `classify_merge_rejection` 비-`MergeRejection` 입력 방어 테스트
+  > - 함수 시그니처는 이미 `MergeRejection | BaseException` 으로 받고 `str(exc)` 호출이라 안전 — 하지만 None/dict/str/임의 객체 입력 시 `OTHER` fallback 동작을 회귀로 묶음.
+  > - 회귀: `TestClassifyMergeRejectionDefensive` 5건.
+  > 
+  > ## F-5 — PR #54 reviewer P2 후속 (3건)
+  > 
+  > ### #1 daemon worker graceful join
+  > - `_active_write_workers: set[threading.Thread]` + `_active_write_workers_lock` 모듈 스코프 추가.
+  > - `_spawn_write_worker` 가 wrapper closure 로 add/discard 자동 수행.
+  > - 신규 `_join_active_write_workers(timeout, logger)` — timeout 을 thread 수로 공평 배분, hang 한 thread 가 다른 thread join 을 막지 않음. join timeout 초과 thread 는 로그 warning + daemon 강제 회수에 위임.
+- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._

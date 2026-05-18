@@ -248,6 +248,12 @@ gh label create prd-requested prd-ready design-ready impl-wip impl-ready \
 - **브랜치는 슬러그 하나당 하나**: `feature/<slug>`. 두 역할(예: FE + BE)이 같은 slug면 같은 브랜치에서 작업하거나 `feature/<slug>-fe`, `feature/<slug>-be`로 분리.
 - **PRD 수정은 PM만**. 구현 중 모호함이 나오면 QA/개발자는 PR·Issue 코멘트로 질문 → PM이 PRD를 갱신 → 라벨 되돌림.
 - **리뷰어 독립성**: PR 작성자와 다른 사람(또는 별도 cmux 패널/워크트리의 Reviewer 에이전트)이 리뷰. 본인 PR 자가-승인 금지.
+  - **단일 운영자 MVP 단계 (현재)**: GitHub가 self-approval API를 차단해 같은 사용자가 자기 PR에 `--approve` 불가. 이때는 별도 cmux 패널의 Reviewer 에이전트가 검증한 뒤 `--comment` + `review-approved` 라벨로 게이트를 표시한다(허용 범위). 라벨이 머지 게이트 역할을 한다.
+  - **다중 사용자 / 외부 PR 도입 트리거**: 아래 중 하나라도 충족되면 별도 GitHub 계정(bot account 또는 별도 사용자)으로 reviewer를 분리해 실제 `--approve`로 전환한다.
+    - 다른 사람이 봇 화이트리스트(`ai/dev_relay/auth.py`)에 추가될 때
+    - 외부 컨트리뷰터 PR(예: 봇 운영자 외 사용자가 만든 PR)을 정식 파이프라인에 편입할 때
+    - self-review 누적이 운영 부담으로 인식될 때(예: 단일 세션에서 6건 이상 누적되어 자동화·통계 가시성이 떨어지는 경우)
+  - **공통 원칙**: 단계와 무관하게 자기 PR에 대한 `--approve` 직접 호출은 금지. 라벨 게이트와 실제 reviewer 의사 표시는 반드시 일치해야 한다.
 - **slug 산출물은 feature 브랜치에**: `docs/prd/<slug>.md`, `docs/qa/<slug>.md`, `docs/design/<slug>.md` 등 특정 slug에 귀속되는 산출물은 그 slug의 `feature/<slug>` 브랜치에 commit한다. main에 직접 commit·push 금지. 메인 Claude가 sub-agent 산출물(QA 리포트 등)을 push할 때는 `git branch --show-current` 로 현재 브랜치를 먼저 확인하고, 잘못 main에 들어간 commit이 있으면 즉시 cherry-pick → reset 으로 정정한다.
 
 ---

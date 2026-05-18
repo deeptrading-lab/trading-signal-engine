@@ -88,6 +88,7 @@ def _build_pre_tool_use_hook(
                 {
                     "ts": now_iso(),
                     "kind": "tool_call",
+                    "user_id_masked": user_id_masked,
                     "stage": "respond",
                     "tool": tool_name,
                     "brief": decision.brief,
@@ -99,6 +100,7 @@ def _build_pre_tool_use_hook(
             {
                 "ts": now_iso(),
                 "kind": "tool_denied",
+                "user_id_masked": user_id_masked,
                 "stage": "respond",
                 "tool": tool_name,
                 "reason": decision.reason or "not_whitelisted",

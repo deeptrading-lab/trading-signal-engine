@@ -54,6 +54,58 @@ class MergeRejection(RuntimeError):
     """머지 호출 전 사전 검증 실패. `_perform_merge` 호출 자체가 차단됐음을 의미."""
 
 
+# PRD §3.3 추가 안전망 — `MergeRejection` 의 reason 코드. 호출 측이 사용자 안내
+# 메시지를 분기하기 위해 비교한다 (문자열 비교로 충분 — 본 모듈 외부 의존 0).
+REJECTION_REASON_RESTART_NO_EXPECTED: str = "expected approval missing (restart)"
+
+
+# audit `rejection_reason` 카테고리 (PR #51 reviewer P2 #1 후속).
+# `MergeRejection` 메시지를 분류해 audit.jsonl 에 정규화된 카테고리로 기록한다.
+# `UNKNOWN_ERROR` 단일 분류로 묶이던 케이스를 세분화 → 재시작 거절·멱등성 불일치·
+# 화이트리스트 위반·페이로드 형식 위반 빈도를 분리 분석 가능.
+REJECTION_CATEGORY_RESTART_NO_EXPECTED: str = "restart_no_expected"
+REJECTION_CATEGORY_IDEMPOTENCY_MISMATCH: str = "idempotency_mismatch"
+REJECTION_CATEGORY_JOB_ID_MISMATCH: str = "job_id_mismatch"
+REJECTION_CATEGORY_USER_NOT_ALLOWED: str = "user_not_allowed"
+REJECTION_CATEGORY_INVALID_PAYLOAD: str = "invalid_payload"
+REJECTION_CATEGORY_UNEXPECTED_ACTION: str = "unexpected_action"
+REJECTION_CATEGORY_OTHER: str = "other"
+
+
+def classify_merge_rejection(exc: MergeRejection | BaseException) -> str:
+    """`MergeRejection` 사유 문자열을 카테고리 1개로 분류.
+
+    audit.jsonl `rejection_reason` 필드 값으로 사용. 카테고리는 정규화 상수 —
+    분석 도구 회귀를 최소화하려 일관 라벨만 노출한다. 매칭 우선순위:
+
+    1. `restart_no_expected` (`expected_*` None — 데몬 재시작 후 이전 페이로드)
+    2. `idempotency_mismatch` (멱등성 키 불일치)
+    3. `job_id_mismatch` (job_id 불일치)
+    4. `user_not_allowed` (화이트리스트 미통과)
+    5. `invalid_payload` (pr_number / idempotency_key / job_id 누락·형식 위반)
+    6. `unexpected_action` (action_id 불일치)
+    7. `other` (위 어디에도 매칭되지 않음 — 신규 reason 도입 시 fallback)
+    """
+    msg = str(exc)
+    if msg == REJECTION_REASON_RESTART_NO_EXPECTED:
+        return REJECTION_CATEGORY_RESTART_NO_EXPECTED
+    if "idempotency_key mismatch" in msg:
+        return REJECTION_CATEGORY_IDEMPOTENCY_MISMATCH
+    if "job_id mismatch" in msg:
+        return REJECTION_CATEGORY_JOB_ID_MISMATCH
+    if "user_id not in allowed list" in msg:
+        return REJECTION_CATEGORY_USER_NOT_ALLOWED
+    if (
+        "invalid pr_number" in msg
+        or "missing idempotency_key" in msg
+        or "invalid job_id" in msg
+    ):
+        return REJECTION_CATEGORY_INVALID_PAYLOAD
+    if msg.startswith("unexpected action_id"):
+        return REJECTION_CATEGORY_UNEXPECTED_ACTION
+    return REJECTION_CATEGORY_OTHER
+
+
 def validate_approval(
     *,
     pr_number_in_payload: int | None,
@@ -69,6 +121,11 @@ def validate_approval(
 
     실패 시 `MergeRejection` raise — 호출 측은 이 예외를 잡아 사용자 안내 +
     audit 기록을 수행한다.
+
+    PR #43 reviewer P2-1 후속: `expected_*` 가 모두 None 인 경우 (데몬 재시작
+    후 이전 세션의 메시지 버튼이 눌린 케이스) 페이로드 자체만 검증하던 약화된
+    fallback 분기를 제거한다. 이전 세션 페이로드는 idempotency_key 매칭 backstop
+    을 통과시킬 수 없으므로 즉시 거절한다.
     """
     if action_id != "approve_merge":
         raise MergeRejection(f"unexpected action_id={action_id}")
@@ -80,12 +137,13 @@ def validate_approval(
         raise MergeRejection("missing idempotency_key in payload")
     if job_id_in_payload is None or job_id_in_payload <= 0:
         raise MergeRejection("invalid job_id in payload")
-    if (
-        expected_idempotency_key is not None
-        and expected_idempotency_key != idempotency_key_in_payload
-    ):
+    # PR #43 reviewer P2-1: expected_* 둘 중 하나라도 None 이면 즉시 거절.
+    # 단일 정의 지점 — 호출 측 회귀 0 보장.
+    if expected_idempotency_key is None or expected_job_id is None:
+        raise MergeRejection(REJECTION_REASON_RESTART_NO_EXPECTED)
+    if expected_idempotency_key != idempotency_key_in_payload:
         raise MergeRejection("idempotency_key mismatch")
-    if expected_job_id is not None and expected_job_id != job_id_in_payload:
+    if expected_job_id != job_id_in_payload:
         raise MergeRejection("job_id mismatch")
     return ApprovalContext(
         pr_number=pr_number_in_payload,
@@ -173,6 +231,15 @@ __all__ = [
     "MergeOutcome",
     "MergeRejection",
     "MergeWorker",
+    "REJECTION_CATEGORY_IDEMPOTENCY_MISMATCH",
+    "REJECTION_CATEGORY_INVALID_PAYLOAD",
+    "REJECTION_CATEGORY_JOB_ID_MISMATCH",
+    "REJECTION_CATEGORY_OTHER",
+    "REJECTION_CATEGORY_RESTART_NO_EXPECTED",
+    "REJECTION_CATEGORY_UNEXPECTED_ACTION",
+    "REJECTION_CATEGORY_USER_NOT_ALLOWED",
+    "REJECTION_REASON_RESTART_NO_EXPECTED",
+    "classify_merge_rejection",
     "classify_merge_stderr",
     "extract_sha",
     "perform_merge",
