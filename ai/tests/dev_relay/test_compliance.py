@@ -36,6 +36,9 @@ PRD_SHELL_PIPE_ALLOW_PATH = (
 PRD_WRITE_TOOLS_PATH = (
     REPO_ROOT / "docs" / "prd" / "dev-relay-write-tools.md"
 )
+PRD_WRITE_TOOLS_NL_PATH = (
+    REPO_ROOT / "docs" / "prd" / "dev-relay-write-tools-nl.md"
+)
 DEV_RELAY_DIR = REPO_ROOT / "ai" / "dev_relay"
 
 
@@ -87,6 +90,9 @@ _STATIC_TEMPLATES = (
     ("TEMPLATE_FAIL_GITHUB_UNPROCESSABLE", slack_renderer.TEMPLATE_FAIL_GITHUB_UNPROCESSABLE),
     ("TEMPLATE_FAIL_COMPLIANCE_BLOCKED", slack_renderer.TEMPLATE_FAIL_COMPLIANCE_BLOCKED),
     ("TEMPLATE_FAIL_UNKNOWN", slack_renderer.TEMPLATE_FAIL_UNKNOWN),
+    # PRD `dev-relay-write-tools-nl.md` §3.3 + §3.4 신규 템플릿.
+    ("TEMPLATE_NL_CONVERSION_PREFIX", slack_renderer.TEMPLATE_NL_CONVERSION_PREFIX),
+    ("TEMPLATE_NL_WRITE_AMBIGUOUS", slack_renderer.TEMPLATE_NL_WRITE_AMBIGUOUS),
 )
 
 
@@ -252,6 +258,18 @@ def test_prd_write_tools_body_outside_code_is_clean():
     matched = find_forbidden_keywords(body)
     assert matched == [], (
         f"write 도구 PRD 본문에 도메인 키워드가 노출되어 있습니다: {matched}"
+    )
+
+
+def test_prd_write_tools_nl_body_outside_code_is_clean():
+    """Phase 3 NL 자율 트리거 PRD 산문 검사 (AC-WTN-12)."""
+    if not PRD_WRITE_TOOLS_NL_PATH.exists():
+        pytest.skip("PRD 파일이 작업 트리에 없음 (브랜치 base 차이).")
+    text = PRD_WRITE_TOOLS_NL_PATH.read_text(encoding="utf-8")
+    body = _strip_code_blocks(text)
+    matched = find_forbidden_keywords(body)
+    assert matched == [], (
+        f"Phase 3 PRD 본문에 도메인 키워드가 노출되어 있습니다: {matched}"
     )
 
 

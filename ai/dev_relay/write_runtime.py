@@ -271,6 +271,60 @@ def _extract_unified_diff(raw: str) -> str:
     return raw.strip() + "\n"
 
 
+def make_write_converter(
+    *,
+    cwd: str | None = None,
+) -> Callable[[str, str], str] | None:
+    """NL → structured 변환 SDK callable 생성 (PRD `dev-relay-write-tools-nl.md` §3.2).
+
+    인자 시그니처: (system_prompt, user_text) → JSON 문자열.
+
+    PM 결정 §10 — Sonnet 4.6 사용 (변환 정확도 우선). 시스템 프롬프트가 strict
+    JSON 출력만 허용하도록 강제하고, 본 callable 은 raw 응답을 그대로 반환한다.
+    JSON 파싱·검증은 `write_classifier.parse_conversion_response` 가 처리.
+
+    SDK import 실패 시 None 반환 — 호출 측이 변환 분기 비활성으로 graceful degradation.
+    """
+    try:
+        from claude_agent_sdk import (
+            AssistantMessage,
+            ClaudeAgentOptions,
+            TextBlock,
+            query,
+        )
+    except ImportError as exc:
+        _LOGGER.warning(
+            "write converter SDK import 실패 (%s) — NL 자율 트리거 비활성",
+            type(exc).__name__,
+        )
+        return None
+
+    def _convert(system_prompt: str, user_text: str) -> str:
+        options = ClaudeAgentOptions(
+            model=MODEL_SONNET_ID,
+            system_prompt=system_prompt,
+            # 변환은 도구 호출 불필요 — strict JSON 합성만.
+            allowed_tools=[],
+            max_turns=1,
+            cwd=cwd,
+        )
+        chunks: list[str] = []
+
+        async def _drain() -> None:
+            async for message in query(prompt=user_text, options=options):
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            chunks.append(block.text)
+
+        import asyncio
+
+        asyncio.run(_drain())
+        return "".join(chunks).strip()
+
+    return _convert
+
+
 def make_commit_message_generator(
     *,
     cwd: str | None = None,
@@ -334,4 +388,5 @@ __all__ = [
     "make_commit_message_generator",
     "make_patch_generator",
     "make_reviewer_callable",
+    "make_write_converter",
 ]

@@ -229,6 +229,37 @@ class TestRunTurnHaikuBranch:
         assert "PC" in result.messages[0]
 
 
+class TestRunTurnWriteRequestBranch:
+    """PRD `dev-relay-write-tools-nl.md` §3.1.3 — WRITE_REQUEST 라벨은 messages
+    를 만들지 않고 즉시 반환 (호출 측이 변환 분기 처리)."""
+
+    def test_write_request_short_circuit(self, audit_sink, now_iso):
+        def classifier(_sys, _user):
+            return ClassificationResult(label=IntentLabel.WRITE_REQUEST)
+
+        def haiku(_text):
+            raise AssertionError("Haiku must not be called for WRITE_REQUEST")
+
+        def sonnet(_text, _sid):
+            raise AssertionError("Sonnet must not be called for WRITE_REQUEST")
+
+        result = run_turn(
+            user_text="PR 32 에 patch 적용해줘",
+            user_id_masked="U0AE7A***",
+            classifier=classifier,
+            haiku_responder=haiku,
+            sonnet_responder=sonnet,
+            audit=audit_sink,
+            now_iso=now_iso,
+        )
+        assert result.label == IntentLabel.WRITE_REQUEST
+        # messages 가 비어 있다 — 호출 측이 자체 발사.
+        assert result.messages == []
+        # classify stage 만 기록 (respond stage 없음).
+        assert "classify" in result.stage_used
+        assert "respond" not in result.stage_used
+
+
 class TestRunTurnSonnetBranch:
     """SUMMARY_REQUEST / REPORT_REQUEST 라벨 → Sonnet 분기."""
 

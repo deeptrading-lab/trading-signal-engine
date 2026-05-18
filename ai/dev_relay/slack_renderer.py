@@ -135,6 +135,20 @@ TEMPLATE_WRITE_SHUTDOWN_NOTICE: str = (
     "이전 세션에서 승인 대기 중이던 작업은 무효화됐어요. 필요하면 다시 명령해 주세요."
 )
 
+# PRD `dev-relay-write-tools-nl.md` §3.3 — Phase 3 NL → structured 변환 결과 표시.
+# 변환 투명성 — 사용자가 자연어로 어떻게 변환됐는지 confirm 다이얼로그에서 확인.
+TEMPLATE_NL_CONVERSION_PREFIX: str = (
+    "[자연어 변환 결과]\n"
+    "원본: {original}\n"
+    "변환: {converted}\n\n"
+)
+
+# PRD `dev-relay-write-tools-nl.md` §3.4 — 모호 의도 거절 안내. 한국어 1~2줄.
+TEMPLATE_NL_WRITE_AMBIGUOUS: str = (
+    "요청 의도가 명확하지 않아요. PR 번호와 원하는 작업(패치 적용/커밋/푸시)을 "
+    "더 명확하게 적어 주세요."
+)
+
 # PRD `dev-relay-agent-integration.md` §3.5 — 실패 분류 → 사용자 노출 메시지.
 TEMPLATE_FAIL_DESTRUCTIVE_BLOCKED: str = (
     "이 작업은 PC에서 직접 처리해 주세요."
@@ -407,6 +421,28 @@ def build_merge_confirm_blocks(
     ]
 
 
+def _format_nl_prefix(
+    *,
+    nl_original: str | None,
+    structured_command: str | None,
+) -> str:
+    """NL 자율 트리거에서 변환 결과를 confirm 다이얼로그 앞에 표시 (§3.3).
+
+    PRD `dev-relay-write-tools-nl.md` §3.3.1 — 변환 투명성. 사용자가 자기 NL
+    원문과 변환된 structured 명령을 함께 본 뒤 confirm.
+
+    두 인자 중 하나라도 비어 있으면 빈 문자열 반환 (structured 진입 시 prefix
+    없이 본 dry-run 만 표시). 본 함수가 반환한 prefix 는 호출 측이 본 body 와
+    합쳐 한 번에 `guard_text` 통과시킨다.
+    """
+    if not nl_original or not structured_command:
+        return ""
+    return TEMPLATE_NL_CONVERSION_PREFIX.format(
+        original=nl_original.strip(),
+        converted=structured_command.strip(),
+    )
+
+
 def build_patch_confirm_blocks(
     *,
     pr_number: int,
@@ -415,10 +451,16 @@ def build_patch_confirm_blocks(
     file_count: int,
     added: int,
     removed: int,
+    nl_original: str | None = None,
+    structured_command: str | None = None,
 ) -> list[dict[str, Any]]:
     """PRD `dev-relay-write-tools.md` §3.2.3 / AC-WT-2 — patch confirm 다이얼로그.
 
     dry-run 요약(변경 파일·라인 수) + [패치 적용]/[취소] 버튼.
+
+    PRD `dev-relay-write-tools-nl.md` §3.3.1 — `nl_original` + `structured_command`
+    가 주어지면 본 body 앞에 변환 투명성 prefix 를 붙인다. structured 진입에서는
+    두 인자 모두 None — 기존 회귀 0 (회귀 보존을 위해 default None 유지).
     """
     action_value = build_action_value_v2(
         pr_number=pr_number,
@@ -431,10 +473,14 @@ def build_patch_confirm_blocks(
         added=added,
         removed=removed,
     )
+    prefix = _format_nl_prefix(
+        nl_original=nl_original, structured_command=structured_command,
+    )
+    full_body = prefix + body if prefix else body
     return [
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": guard_text(body)},
+            "text": {"type": "mrkdwn", "text": guard_text(full_body)},
         },
         {
             "type": "actions",
@@ -466,8 +512,13 @@ def build_commit_confirm_blocks(
     job_id: int,
     message: str,
     file_count: int,
+    nl_original: str | None = None,
+    structured_command: str | None = None,
 ) -> list[dict[str, Any]]:
-    """PRD AC-WT-3 — commit confirm 다이얼로그."""
+    """PRD AC-WT-3 — commit confirm 다이얼로그.
+
+    PRD `dev-relay-write-tools-nl.md` §3.3.1 — NL 자율 트리거 변환 투명성 prefix.
+    """
     action_value = build_action_value_v2(
         pr_number=pr_number,
         idempotency_key=idempotency_key,
@@ -479,10 +530,14 @@ def build_commit_confirm_blocks(
         message=safe_msg,
         file_count=file_count,
     )
+    prefix = _format_nl_prefix(
+        nl_original=nl_original, structured_command=structured_command,
+    )
+    full_body = prefix + body if prefix else body
     return [
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": guard_text(body)},
+            "text": {"type": "mrkdwn", "text": guard_text(full_body)},
         },
         {
             "type": "actions",
@@ -515,8 +570,13 @@ def build_push_confirm_blocks(
     branch: str,
     remote: str,
     commit_count: int,
+    nl_original: str | None = None,
+    structured_command: str | None = None,
 ) -> list[dict[str, Any]]:
-    """PRD AC-WT-4 — push confirm 다이얼로그."""
+    """PRD AC-WT-4 — push confirm 다이얼로그.
+
+    PRD `dev-relay-write-tools-nl.md` §3.3.1 — NL 자율 트리거 변환 투명성 prefix.
+    """
     action_value = build_action_value_v2(
         pr_number=pr_number,
         idempotency_key=idempotency_key,
@@ -528,10 +588,14 @@ def build_push_confirm_blocks(
         remote=remote,
         commit_count=commit_count,
     )
+    prefix = _format_nl_prefix(
+        nl_original=nl_original, structured_command=structured_command,
+    )
+    full_body = prefix + body if prefix else body
     return [
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": guard_text(body)},
+            "text": {"type": "mrkdwn", "text": guard_text(full_body)},
         },
         {
             "type": "actions",
@@ -634,6 +698,9 @@ _STATIC_TEMPLATES: tuple[str, ...] = (
     TEMPLATE_WRITE_SDK_UNAVAILABLE,
     TEMPLATE_WRITE_COMPLIANCE_BLOCKED,
     TEMPLATE_WRITE_SHUTDOWN_NOTICE,
+    # PRD `dev-relay-write-tools-nl.md` §3.3 + §3.4 신규 템플릿.
+    TEMPLATE_NL_CONVERSION_PREFIX,
+    TEMPLATE_NL_WRITE_AMBIGUOUS,
 )
 
 for _template in _STATIC_TEMPLATES:
