@@ -26,6 +26,10 @@ model: inherit
 ## 산출물 규약
 - 최종 응답에 **브랜치명·커밋 해시·PR URL**을 한 줄로 명시. 예: `브랜치: feature/slack-signal-approval | PR: #42`
 
+## PR 본문 규약 (필수)
+- PR 본문에 `## 다음 작업` 섹션을 반드시 포함한다. 후속 PR 후보·운영 모니터링·관련 slug 등 다음 작업자가 참고할 항목을 1~3 불릿. 종결이라면 "이번 PR 로 종결, 후속 없음" 한 줄 명시.
+- `qa-passed` 라벨이 붙는 순간 [.github/workflows/handoff-append.yml](../../.github/workflows/handoff-append.yml) 가 이 섹션을 `docs/HANDOFF.md` 항목으로 자동 채워준다. 빠지면 다음 작업자가 컨텍스트 없이 진입.
+
 ## 참고
 - `docs/rules/backend.md`, `docs/rules/ai.md`
 - `skills/spring-api/SKILL.md`
