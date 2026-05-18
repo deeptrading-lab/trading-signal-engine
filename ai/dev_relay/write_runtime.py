@@ -19,6 +19,21 @@ import logging
 import os
 from typing import Any, Callable
 
+
+# PR #59 reviewer P1-3 후속 — NL → structured 변환 SDK 호출 timeout.
+# `_handle_nl_write_conversion` 이 메시지 핸들러 thread 에서 `_nl_turn_lock` 보유
+# 중 동기 호출하므로, SDK hang 시 NL 분기 전체가 영구 차단된다. 본 timeout 은
+# 그 가능성을 0 으로 만들기 위한 상한. 1~2주 모니터링 후 조정.
+WRITE_CONVERTER_TIMEOUT_SECONDS: float = 30.0
+
+
+class WriteConverterTimeout(Exception):
+    """write converter SDK 호출 timeout — 호출 측이 명시 분류로 처리.
+
+    `write_classifier.convert` 가 본 예외를 잡아 `ConversionFailReason.TIMEOUT`
+    으로 매핑한다.
+    """
+
 from ai.dev_relay.nl_classifier import MODEL_HAIKU_ID, MODEL_SONNET_ID
 from ai.dev_relay.reviewer import ReviewResult
 
@@ -271,6 +286,81 @@ def _extract_unified_diff(raw: str) -> str:
     return raw.strip() + "\n"
 
 
+def make_write_converter(
+    *,
+    cwd: str | None = None,
+    timeout_seconds: float = WRITE_CONVERTER_TIMEOUT_SECONDS,
+) -> Callable[[str, str], str] | None:
+    """NL → structured 변환 SDK callable 생성 (PRD `dev-relay-write-tools-nl.md` §3.2).
+
+    인자 시그니처: (system_prompt, user_text) → JSON 문자열.
+
+    PM 결정 §10 — Sonnet 4.6 사용 (변환 정확도 우선). 시스템 프롬프트가 strict
+    JSON 출력만 허용하도록 강제하고, 본 callable 은 raw 응답을 그대로 반환한다.
+    JSON 파싱·검증은 `write_classifier.parse_conversion_response` 가 처리.
+
+    SDK import 실패 시 None 반환 — 호출 측이 변환 분기 비활성으로 graceful degradation.
+
+    PR #59 reviewer P1-3 후속 — `timeout_seconds` 가 SDK 호출 상한. 초과 시
+    `WriteConverterTimeout` raise. `_handle_nl_write_conversion` 이 NL 분기
+    `_nl_turn_lock` 보유 상태에서 동기 호출하므로, hang 시 NL 분기 영구 차단
+    가능성을 0 으로 만든다. default = `WRITE_CONVERTER_TIMEOUT_SECONDS`.
+    """
+    try:
+        from claude_agent_sdk import (
+            AssistantMessage,
+            ClaudeAgentOptions,
+            TextBlock,
+            query,
+        )
+    except ImportError as exc:
+        _LOGGER.warning(
+            "write converter SDK import 실패 (%s) — NL 자율 트리거 비활성",
+            type(exc).__name__,
+        )
+        return None
+
+    def _convert(system_prompt: str, user_text: str) -> str:
+        options = ClaudeAgentOptions(
+            model=MODEL_SONNET_ID,
+            system_prompt=system_prompt,
+            # 변환은 도구 호출 불필요 — strict JSON 합성만.
+            allowed_tools=[],
+            max_turns=1,
+            cwd=cwd,
+        )
+        chunks: list[str] = []
+
+        async def _drain() -> None:
+            async for message in query(prompt=user_text, options=options):
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            chunks.append(block.text)
+
+        import asyncio
+
+        # PR #59 reviewer P1-3 — `asyncio.wait_for` 로 SDK hang 시 NL 분기
+        # 영구 차단 방지. timeout 초과 시 명시 `WriteConverterTimeout` raise →
+        # 호출 측 (`write_classifier.convert`) 이 reason="timeout" 으로 매핑.
+        async def _drain_with_timeout() -> None:
+            await asyncio.wait_for(_drain(), timeout=timeout_seconds)
+
+        try:
+            asyncio.run(_drain_with_timeout())
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            _LOGGER.warning(
+                "write converter timeout (%.1fs) — NL 분기 락 release 보장",
+                timeout_seconds,
+            )
+            raise WriteConverterTimeout(
+                f"write converter timeout after {timeout_seconds}s"
+            ) from exc
+        return "".join(chunks).strip()
+
+    return _convert
+
+
 def make_commit_message_generator(
     *,
     cwd: str | None = None,
@@ -329,9 +419,12 @@ __all__ = [
     "MODEL_SONNET_ID",
     "REVIEWER_SYSTEM_PROMPT",
     "WRITE_COMMIT_MSG_SYSTEM_PROMPT",
+    "WRITE_CONVERTER_TIMEOUT_SECONDS",
     "WRITE_PATCH_SYSTEM_PROMPT",
+    "WriteConverterTimeout",
     "is_sdk_available",
     "make_commit_message_generator",
     "make_patch_generator",
     "make_reviewer_callable",
+    "make_write_converter",
 ]

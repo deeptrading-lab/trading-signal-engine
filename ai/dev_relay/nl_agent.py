@@ -31,6 +31,7 @@ from ai.dev_relay.nl_classifier import (
     IntentLabel,
     classify,
     routes_to_sonnet,
+    routes_to_write_conversion,
 )
 from ai.dev_relay.slack_renderer import (
     FALLBACK_RESPONSE,
@@ -249,6 +250,18 @@ def run_turn(
     )
 
     # (2) 라우팅 분기.
+    # PRD `dev-relay-write-tools-nl.md` §3.1.3 — `WRITE_REQUEST` 라벨은 본 함수가
+    # 응답을 만들지 않고 즉시 반환. 호출 측 (`_handle_natural_language`) 이
+    # `classification.label` 을 확인해 NL → structured 변환 분기로 라우팅한다.
+    # 변환·confirm 발사·Phase 2 handoff 는 본 함수 책임 밖.
+    if routes_to_write_conversion(classification.label):
+        return AgentTurnResult(
+            label=classification.label,
+            stage_used=stage_used,
+            messages=messages,  # 비어 있음 — 호출 측이 자체 발사.
+            classification=classification,
+        )
+
     if not routes_to_sonnet(classification.label):
         # Haiku 짧은 응답 분기.
         haiku = haiku_responder(user_text)
