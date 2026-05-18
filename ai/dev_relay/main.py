@@ -78,6 +78,7 @@ from ai.dev_relay.nl_agent import (
     AgentTurnResult,
     run_turn,
 )
+from ai.dev_relay.nl_classifier import IntentLabel
 from ai.dev_relay.queue import Job, JobQueue, default_db_path
 from ai.dev_relay.reviewer import (
     ReviewDetailCache,
@@ -92,6 +93,7 @@ from ai.dev_relay.slack_renderer import (
     TEMPLATE_COMMIT_EMPTY_TREE,
     TEMPLATE_DESTRUCTIVE_BLOCKED,
     TEMPLATE_MERGE_CARVE_OUT_NOTICE,
+    TEMPLATE_NL_WRITE_AMBIGUOUS,
     TEMPLATE_PATCH_APPLIED,
     TEMPLATE_PATCH_APPLY_FAILED,
     TEMPLATE_PUSH_DONE,
@@ -378,8 +380,9 @@ def _handle_command(
         return
 
     if parsed.kind is CommandKind.UNKNOWN:
-        # 자연어 분기 진입 (Phase 1 read-only) — runtime 이 주입된 경우에 한해.
-        # AC-1 회귀: fast-path 가 매치된 입력은 본 분기에 도달하지 않는다.
+        # 자연어 분기 진입 (Phase 1 read-only + Phase 3 NL 자율 트리거) — runtime
+        # 이 주입된 경우에 한해. AC-1 회귀: fast-path 가 매치된 입력은 본 분기에
+        # 도달하지 않는다.
         if sessions is not None and nl_runtime is not None:
             _handle_natural_language(
                 text=text,
@@ -389,6 +392,7 @@ def _handle_command(
                 logger=logger,
                 sessions=sessions,
                 nl_runtime=nl_runtime,
+                queue=queue,
             )
             return
         safe_say(say, TEMPLATE_UNKNOWN_COMMAND, logger, context="unknown")
@@ -557,6 +561,260 @@ def _emit_nl_busy_notice(
     )
 
 
+def _handle_nl_write_conversion(
+    *,
+    user_text: str,
+    user_id: str,
+    masked: str,
+    thread_ts: str,
+    channel_id: str,
+    event: dict,
+    say: Any,
+    logger: logging.Logger,
+    queue: JobQueue,
+    write_converter: Callable[[str, str], str] | None,
+) -> None:
+    """NL `WRITE_REQUEST` 분기 — SDK 변환 → Phase 2 흐름 재진입.
+
+    PRD `dev-relay-write-tools-nl.md` §3.2 / §3.3 / §3.4.
+
+    동작 순서:
+    1. write SDK 가용 + write shutdown flag 미set 확인.
+    2. NL 입력 자체에 destructive 표지가 있는지 1차 검증 (`is_destructive`).
+       Haiku 분류가 통과시켜도 본 단계가 다시 막는다 — 다층 가드 (PRD §3.5).
+    3. 변환 SDK 호출 → `parse_conversion_response` 검증.
+    4. 성공 시 합성된 structured 명령을 dispatcher `parse` 에 통과 (재정규화),
+       `_handle_write_command` 진입 (Phase 2 흐름 그대로).
+    5. 실패 시 `nl_write_conversion_failed` audit + 사용자 거절 안내.
+
+    호출 측 `_handle_natural_language` 이 `_nl_turn_lock` 을 보유한 상태로 본 함수를
+    호출한다. 본 함수는 confirm 발사 + Phase 2 worker spawn 까지만 — 실 적용은
+    사용자가 confirm 클릭한 뒤 별도 action handler 가 수행.
+    """
+    from ai.dev_relay.dispatcher import is_destructive, parse
+    from ai.dev_relay.write_classifier import (
+        ConversionFailReason,
+        ConversionRejection,
+        ConversionSuccess,
+        convert,
+    )
+
+    # PRD §3.5 단계 1 — NL 입력 자체에 destructive 표지가 있으면 변환 SDK 호출
+    # 하지 않고 차단. classify 단계의 `UNKNOWN_OR_DESTRUCTIVE` fallback 과
+    # 중복되지만 다층 가드. 회귀 안전망.
+    if is_destructive(user_text):
+        logger.info("nl write: destructive input — skip conversion")
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "nl_write_conversion_failed",
+                "thread_ts": thread_ts,
+                "user_id_masked": masked,
+                "reason": "destructive_input",
+            }
+        )
+        safe_say(
+            say,
+            TEMPLATE_DESTRUCTIVE_BLOCKED,
+            logger,
+            context="nl_write_destructive_input",
+        )
+        return
+
+    # PRD §3.6 — write shutdown flag 가 set 이면 변환 자체를 시도하지 않는다.
+    if _write_shutdown_flag.is_set():
+        logger.info("nl write: write shutdown flag set — skip conversion")
+        safe_say(
+            say,
+            TEMPLATE_WRITE_SHUTDOWN_NOTICE,
+            logger,
+            context="nl_write_shutdown",
+        )
+        return
+
+    # PRD §3.4 — 변환 SDK 미가용 (import 실패 / runtime None) 이면 거절 안내.
+    if write_converter is None:
+        logger.info("nl write: converter unavailable")
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "nl_write_conversion_failed",
+                "thread_ts": thread_ts,
+                "user_id_masked": masked,
+                "reason": "converter_unavailable",
+            }
+        )
+        safe_say(
+            say,
+            TEMPLATE_WRITE_SDK_UNAVAILABLE,
+            logger,
+            context="nl_write_no_converter",
+        )
+        return
+
+    # PR #59 reviewer P1-1 — Phase 2 structured 경로와 동일한 `running_count >= 1`
+    # busy 게이트를 NL 변환 경로 진입 직전에 적용. AC-WTN-7 ("Phase 2 흐름 재사용")
+    # 보장 + structured + NL 혼합 시 confirm 다이얼로그 동시 노출 차단.
+    # SDK 호출 이전 단계에서 차단해 토큰 낭비도 회피한다. `_nl_turn_lock` 은 NL 끼리만
+    # 직렬화하므로 structured running 상태와는 독립 — 본 게이트가 그 갭을 메운다.
+    running_count = queue.count_by_status("running")
+    if running_count >= 1:
+        pending_count = queue.count_by_status("pending")
+        logger.info(
+            "nl write: running_count=%d — apply structured busy gate", running_count
+        )
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "nl_write_conversion_failed",
+                "thread_ts": thread_ts,
+                "user_id_masked": masked,
+                "reason": "busy",
+            }
+        )
+        safe_say(
+            say,
+            TEMPLATE_QUEUE_BUSY.format(pending=pending_count),
+            logger,
+            context="nl_write_busy",
+        )
+        return
+
+    # PRD §3.2.1 단계 1~3 — 변환 + 검증.
+    result = convert(user_text, converter=write_converter)
+    if isinstance(result, ConversionRejection):
+        logger.info("nl write: conversion rejected reason=%s", result.reason.value)
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "nl_write_conversion_failed",
+                "thread_ts": thread_ts,
+                "user_id_masked": masked,
+                "reason": result.reason.value,
+            }
+        )
+        safe_say(
+            say,
+            TEMPLATE_NL_WRITE_AMBIGUOUS,
+            logger,
+            context="nl_write_ambiguous",
+        )
+        return
+
+    assert isinstance(result, ConversionSuccess)
+    _append_audit(
+        {
+            "ts": _now_kst(),
+            "kind": "nl_write_converted",
+            "thread_ts": thread_ts,
+            "user_id_masked": masked,
+            "tool": result.tool,
+            "pr": result.pr_number,
+            "confidence": result.confidence,
+        }
+    )
+
+    # PRD §3.2.1 단계 5 — 합성된 structured 문자열을 dispatcher 에 그대로 통과.
+    # 다층 가드 — 변환 SDK 가 잘못된 합성을 만들면 dispatcher 의 destructive·
+    # 화이트리스트 매치가 다시 검증한다. NL 진입이라고 가드 우회 0건.
+    parsed = parse(result.structured_command)
+    if parsed.kind not in (
+        CommandKind.APPLY_PATCH_PR,
+        CommandKind.COMMIT_PR,
+        CommandKind.PUSH_PR,
+    ):
+        logger.warning(
+            "nl write: synthesized command did not match dispatcher (kind=%s)",
+            parsed.kind.value,
+        )
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "nl_write_conversion_failed",
+                "thread_ts": thread_ts,
+                "user_id_masked": masked,
+                "reason": "dispatcher_mismatch",
+            }
+        )
+        safe_say(
+            say,
+            TEMPLATE_NL_WRITE_AMBIGUOUS,
+            logger,
+            context="nl_write_dispatcher_mismatch",
+        )
+        return
+
+    # PRD §3.2.1 단계 4~5 — Phase 2 흐름 재진입. queue 적재 + worker spawn.
+    # idempotency_key 는 NL 이벤트의 client_msg_id 를 그대로 사용 — 같은 NL 메시지
+    # 재수신 시 Phase 2 의 patch_requested 멱등성이 그대로 적용된다 (AC-WTN-9).
+    idempotency_key = _extract_idempotency_key(event)
+    if not idempotency_key:
+        logger.warning("nl write: missing idempotency key — abort")
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "nl_write_conversion_failed",
+                "thread_ts": thread_ts,
+                "user_id_masked": masked,
+                "reason": "missing_idempotency_key",
+            }
+        )
+        safe_say(say, FALLBACK_RESPONSE, logger, context="nl_write_no_key")
+        return
+
+    job, created = queue.enqueue(
+        idempotency_key=idempotency_key,
+        user_id=user_id,
+        command=parsed.normalized,
+    )
+    if not created:
+        # PR #59 reviewer P1-2 — duplicate idempotency key 차단 시 `nl_write_converted`
+        # 만 남고 후속 audit 없는 dangling chain 문제. `nl_write_dup_ignored` 1줄로
+        # chain 닫기. 다운스트림 분석에서 "변환 후 어떻게 됐는지" 추적 가능.
+        logger.info(
+            "nl write: duplicate event — queue row 1건 유지 (job_id=%d)", job.id
+        )
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "nl_write_dup_ignored",
+                "thread_ts": thread_ts,
+                "user_id_masked": masked,
+                "job_id": job.id,
+                "tool": result.tool,
+                "pr": result.pr_number,
+            }
+        )
+        return  # AC-WTN-9: 멱등성. 두 번째 이벤트는 무응답.
+
+    _append_audit(
+        {
+            "ts": _now_kst(),
+            "kind": "nl_write_handoff",
+            "thread_ts": thread_ts,
+            "user_id_masked": masked,
+            "job_id": job.id,
+            "tool": result.tool,
+            "pr": result.pr_number,
+        }
+    )
+
+    # Phase 2 `_handle_write_command` 호출 — NL 컨텍스트를 confirm 다이얼로그에
+    # 전달해 §3.3 변환 투명성 prefix 가 표시되도록 한다.
+    _handle_write_command(
+        kind=parsed.kind,
+        pr_number=result.pr_number,
+        idempotency_key=idempotency_key,
+        job_id=job.id,
+        event=event,
+        user_id=user_id,
+        say=say,
+        logger=logger,
+        nl_original=user_text,
+        structured_command=result.structured_command,
+    )
+
+
 def _handle_natural_language(
     *,
     text: str,
@@ -566,6 +824,7 @@ def _handle_natural_language(
     logger: logging.Logger,
     sessions: AgentSessionStore,
     nl_runtime: Any,
+    queue: JobQueue | None = None,
 ) -> None:
     """자연어 분기 진입 (PRD `dev-relay-natural-language.md` + `dev-relay-nl-serialize.md`).
 
@@ -631,6 +890,48 @@ def _handle_natural_language(
             audit=_audit,
             now_iso=_now_kst,
         )
+
+        # PRD `dev-relay-write-tools-nl.md` §3.1.3 — `WRITE_REQUEST` 분기.
+        # run_turn 이 메시지를 만들지 않고 반환 (write 분기는 본 핸들러가 처리).
+        if result.label is IntentLabel.WRITE_REQUEST:
+            # AC-WTN-1 — 분류 결과 audit. classifier 가 confidence 를 반환하지
+            # 않는 현재 시그니처에서는 0.0 으로 기록 (라벨 자체가 보고 가치).
+            # 변환 SDK 가 별도 confidence 를 산출해 `nl_write_converted` 에 기록.
+            _append_audit(
+                {
+                    "ts": _now_kst(),
+                    "kind": "nl_write_classified",
+                    "thread_ts": thread_ts,
+                    "user_id_masked": masked,
+                    "label": result.label.value,
+                    "confidence": 0.0,
+                }
+            )
+            if queue is None:
+                logger.warning("nl write: queue not injected — abort")
+                safe_say(
+                    say,
+                    TEMPLATE_NL_WRITE_AMBIGUOUS,
+                    logger,
+                    context="nl_write_no_queue",
+                )
+                return
+            converter = nl_runtime.get("write_converter") if isinstance(
+                nl_runtime, dict
+            ) else None
+            _handle_nl_write_conversion(
+                user_text=text,
+                user_id=user_id,
+                masked=masked,
+                thread_ts=thread_ts,
+                channel_id=channel_id,
+                event=event,
+                say=say,
+                logger=logger,
+                queue=queue,
+                write_converter=converter,
+            )
+            return
 
         # 세션 갱신: Sonnet 분기에서 session_id 반환 시 store 에 반영.
         if result.sonnet_session_id:
@@ -782,6 +1083,8 @@ def _handle_write_command(
     user_id: str,
     say: Any,
     logger: logging.Logger,
+    nl_original: str | None = None,
+    structured_command: str | None = None,
 ) -> None:
     """write 도구 명령 진입 (PRD §3.2 / AC-WT-2~4).
 
@@ -795,6 +1098,10 @@ def _handle_write_command(
 
     실제 도구 실행(`apply_patch`/`perform_commit`/`perform_push`) 은 confirm 버튼
     클릭 시점에 별도 핸들러에서 수행 — 본 핸들러는 dry-run preview 발사까지만.
+
+    PRD `dev-relay-write-tools-nl.md` §3.3 — `nl_original` + `structured_command`
+    가 주어지면 confirm 다이얼로그에 변환 투명성 prefix 가 표시된다 (Phase 3 NL
+    자율 트리거). structured 진입에서는 두 인자 모두 None — 회귀 0건.
 
     PR #54 reviewer P0 / P1 #4 후속 — 이전 구현은 SDK 호출을 동기 실행해 docstring
     과 어긋났고 Slack 3초 timeout 위반 위험이 있었다. 본 버전은 첫 응답만 동기
@@ -888,6 +1195,8 @@ def _handle_write_command(
                 channel_id=channel_id,
                 say=say,
                 logger=logger,
+                nl_original=nl_original,
+                structured_command=structured_command,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception(
@@ -927,11 +1236,16 @@ def _build_and_send_write_confirm(
     channel_id: str,
     say: Any,
     logger: logging.Logger,
+    nl_original: str | None = None,
+    structured_command: str | None = None,
 ) -> None:
     """SDK 호출 → dry-run preview → confirm Block Kit 발사 + pending 등록.
 
     실 SDK 호출 결과는 `_write_pending[job_id]` 에 컨텍스트로 저장. confirm
     버튼 핸들러가 lookup 해 실 작업을 수행.
+
+    PRD `dev-relay-write-tools-nl.md` §3.3.1 — `nl_original`/`structured_command`
+    가 주어지면 confirm 다이얼로그 본문에 변환 투명성 prefix 가 표시된다.
     """
     from ai.dev_relay.write_runtime import (
         make_commit_message_generator,
@@ -1049,6 +1363,8 @@ def _build_and_send_write_confirm(
             file_count=len(preview.files),
             added=preview.lines_added,
             removed=preview.lines_removed,
+            nl_original=nl_original,
+            structured_command=structured_command,
         )
         say(
             blocks=blocks,
@@ -1149,6 +1465,8 @@ def _build_and_send_write_confirm(
             job_id=job_id,
             message=preview.message,
             file_count=len(preview.staged_files),
+            nl_original=nl_original,
+            structured_command=structured_command,
         )
         say(
             blocks=blocks,
@@ -1212,6 +1530,8 @@ def _build_and_send_write_confirm(
         branch=preview.branch,
         remote=preview.remote,
         commit_count=len(preview.commit_shas),
+        nl_original=nl_original,
+        structured_command=structured_command,
     )
     say(
         blocks=blocks,
@@ -2010,6 +2330,20 @@ def _build_nl_runtime(logger: logging.Logger) -> dict[str, Any] | None:
     def _audit(record: dict[str, Any]) -> None:
         _append_audit(record)
 
+    # PRD `dev-relay-write-tools-nl.md` §3.2 — Phase 3 NL → structured 변환 SDK
+    # callable. SDK import 실패 시 None 으로 두면 `_handle_nl_write_conversion`
+    # 이 graceful 거절 안내.
+    write_converter: Callable[[str, str], str] | None
+    try:
+        from ai.dev_relay.write_runtime import make_write_converter
+        write_converter = make_write_converter()
+    except ImportError as exc:
+        logger.warning(
+            "write 변환 SDK runtime import 실패 (%s) — NL 자율 트리거 비활성.",
+            type(exc).__name__,
+        )
+        write_converter = None
+
     return {
         "classifier": make_classifier(),
         "haiku_responder": make_haiku_responder(),
@@ -2018,6 +2352,7 @@ def _build_nl_runtime(logger: logging.Logger) -> dict[str, Any] | None:
             user_id_masked=masked_user,
             now_iso=_now_kst,
         ),
+        "write_converter": write_converter,
     }
 
 
