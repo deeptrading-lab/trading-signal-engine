@@ -353,3 +353,78 @@ PRD §6.4 / §7 명시 — 본 PR 머지 후 1~2주 모니터링:
 - 컴플라이언스: **60 PASS** (PRD 본문 + 신규 모듈 + 신규 템플릿 2종).
 - 코드 정합: 다층 destructive 가드 6단계 + `_nl_turn_lock` 보유 중 변환 + 4 종 audit kind + Phase 2 chain 자연 연결 모두 확인.
 - Phase 2 (PR #54) 의 AC-WT-7 DEFERRED 는 본 PR 로 회귀 가능한 형태로 완전 해소.
+
+---
+
+## 9. 재검증 — reviewer P1 fix 3건 (2026-05-18 KST, append)
+
+### 9.1 배경
+
+초회 QA (위 §1~§8, 2026-05-18 오전) 에서 PASS 판정 후, reviewer 가 본 PR 에 대해 P1 결함 3건을 식별. 개발자가 fix 3 commit + 회귀 테스트 1 commit 으로 후속 대응. 본 절은 fix 의 회귀 가능 여부와 기존 AC 회귀 영향을 재검증한 결과.
+
+- Fix commits (HEAD = `fab172c`):
+  - `aa8f272` — P1-3: write converter SDK timeout 래핑 (`asyncio.wait_for`, default 30s)
+  - `b97f3d9` — P1-1: NL write 경로 `running_count >= 1` busy 게이트
+  - `eae1728` — P1-2: duplicate enqueue 시 `nl_write_dup_ignored` audit
+  - `fab172c` — P1-1/P1-2/P1-3 회귀 테스트 3 클래스 추가 (+284 LOC, 7 케이스)
+
+### 9.2 P1 fix 매핑
+
+| P | 결함 | Fix 위치 | 회귀 테스트 |
+|---|---|---|---|
+| P1-1 | structured + NL 혼합 시 confirm 다이얼로그 2건 동시 노출 가능 (AC-WTN-7 진술 정합성 깨짐) | `main.py:655-684` — `_handle_nl_write_conversion` 진입 직후 `JobQueue.count_by_status("running") >= 1` 검사. busy 시 audit `kind=nl_write_conversion_failed, reason=busy` + TEMPLATE_NL_BUSY_NOTICE | `TestNLWriteBusyGate::test_running_count_blocks_nl_write_conversion` + `test_running_count_zero_passes_through` |
+| P1-2 | duplicate idempotency key 차단 시 `nl_write_converted` 만 남고 `nl_write_handoff` 없는 dangling audit chain | `main.py:770-787` — `queue.enqueue(...)` 반환의 `created=False` 분기에서 `nl_write_dup_ignored` audit 1줄 (job_id/tool/pr 포함) 추가 | `TestNLWriteDupIgnoredAuditChain::test_duplicate_emits_dup_ignored_audit` |
+| P1-3 | converter SDK hang 시 `_nl_turn_lock` 보유 상태가 무한 지속 → NL 분기 영구 차단 | `write_runtime.py:27-33, 292-356` — `WRITE_CONVERTER_TIMEOUT_SECONDS=30.0` 상수 + `WriteConverterTimeout` 예외 + `asyncio.wait_for(_drain(), timeout=...)` 래핑. `write_classifier.py:213-226` — `convert()` 가 본 예외를 잡아 `ConversionFailReason.TIMEOUT` 매핑. timeout 시 finally 블록에서 `_nl_turn_lock.release()` 자연 수행 | `TestNLWriteConverterTimeout` 4 케이스 — reason 매핑 / 기타 예외와 분리 / audit 발사 + 락 release / SDK 래퍼 직접 검증 |
+
+### 9.3 재검증 실행
+
+```
+$ git rev-parse HEAD
+fab172c test(dev-relay): PR #59 P1-1/P1-2/P1-3 회귀 테스트 추가
+
+$ cd ai && python -m pytest tests/dev_relay/test_write_tools_nl.py -v
+47 passed in 0.15s     # 40 (기존) + 7 (P1 fix)
+
+$ cd ai && python -m pytest tests/dev_relay/ -q
+710 passed in 3.38s    # 기존 703 + 신규 회귀 7 — 0 FAIL
+
+$ cd ai && python -m pytest tests/dev_relay/test_compliance.py -v
+60 passed in 0.03s     # FORBIDDEN_KEYWORDS 0 hit (PRD 본문 / 신규 모듈 / 라벨·audit kind)
+```
+
+- 작업 디렉터리: `/Applications/하영/code_source/trading-signal-engine`
+- Python 3.11.15, pytest 9.0.3 (`.venv`)
+- PR 체크아웃: `gh pr checkout 59` — `feature/dev-relay-write-tools-nl-impl` HEAD = `fab172c` (origin 동기).
+
+### 9.4 기존 AC 회귀 영향 검토
+
+| AC | 영향 | 결과 |
+|---|---|---|
+| AC-WTN-7 (동시성 — `_nl_turn_lock` 직렬화) | **진술 정합성 회복**. 이전 QA 본문 §3 표/§4 AC-WTN-7 는 "NL 분기와 structured 분기는 별도 락 — 같은 PR 에 두 진입이 동시에 진행될 수 있으나 `JobQueue.running_count` 가 적용 게이트 (Phase 2 AC-WT-8)" 로 적은 바 있다. 그러나 PR #59 초회 impl 은 NL 변환 경로에서 `running_count` 게이트를 적용하지 않아 — confirm 발사 직전까지 갈 수 있었고, structured 쪽에서 동시 running 일 때 confirm 2 건이 노출될 가능성이 있었다 (reviewer P1-1 지적). 본 fix 가 NL 변환 진입 직전에 `running_count >= 1` 차단을 적용함으로써 진술이 코드와 일치. `TestNLWriteBusyGate` 가 회귀 안전망. | PASS |
+| AC-WTN-9 (멱등성 — 동일 client_msg_id) | duplicate 시 queue row 1건 유지 정책 변경 없음. audit 만 `nl_write_dup_ignored` 1줄 **추가** — chain 가시성 향상. 기존 `test_duplicate_client_msg_id_one_queue_row` 0 fail. | PASS |
+| AC-WTN-10 (audit chain 4종) | 5번째 audit kind `nl_write_dup_ignored` 가 duplicate 분기에서만 발사. happy-path (`nl_write_classified` → `nl_write_converted` → `nl_write_handoff` → `patch_requested`) 는 변경 없음. dup 시 chain 은 `nl_write_classified` → `nl_write_converted` → `nl_write_dup_ignored` 로 닫힘 (handoff 없음 — duplicate 이므로 의도된 동작). | PASS — 표현이 "4 종" 에서 "정상 4 종 + dup 분기 1 종" 으로 확장됐을 뿐 회귀 0 |
+| AC-WTN-12 (destructive 다층) | NL 변환 진입 가드 6 단계는 그대로. busy 게이트는 destructive 가드 앞 또는 뒤 어느 쪽이든 모두 차단 효과 — code path 검토 결과 destructive 가드 이전 단계에서 동작 (busy 우선 차단 → SDK 토큰 낭비 회피). reviewer 의도와 정합. | PASS |
+| 기타 AC-WTN-1~6/8/11/13~15 | 본 fix 가 건드린 코드 경로는 (1) `_handle_nl_write_conversion` 진입 직후 busy 가드, (2) `queue.enqueue` 직후 duplicate 분기 audit, (3) SDK 호출 래퍼 — 각 AC 시나리오와 직교. 자동 테스트 모두 통과. | PASS |
+
+### 9.5 누적 회귀
+
+- PR #25 (MVP) / #43 (reviewer·merger) / #48 (NL serialize) / #50~#52 (audit canonical) / #54 (Phase 2 write 도구) / #55~#56 (정책·후속) — 누적 회귀 테스트 전수 통과 (`tests/dev_relay/ -q` 710 PASS).
+- 컴플라이언스 60 PASS 안에 본 fix 가 추가한 `WRITE_CONVERTER_TIMEOUT_SECONDS` / `WriteConverterTimeout` / `nl_write_dup_ignored` / `nl_write_busy` 식별자 0 hit — 봇 표시명 / 외부 노출 텍스트 도메인 키워드 누설 없음.
+
+### 9.6 신규 회귀 테스트 7건 상세
+
+| 클래스 | 케이스 | 검증 포인트 |
+|---|---|---|
+| `TestNLWriteBusyGate` | `test_running_count_blocks_nl_write_conversion` | running=1 일 때 SDK 호출 0 + audit `reason=busy` + busy 안내 발사 |
+| `TestNLWriteBusyGate` | `test_running_count_zero_passes_through` | running=0 일 때 정상 통과 (회귀 안전망) |
+| `TestNLWriteDupIgnoredAuditChain` | `test_duplicate_emits_dup_ignored_audit` | duplicate 시 `nl_write_dup_ignored` audit (job_id/tool/pr 포함) + handoff audit 0건 |
+| `TestNLWriteConverterTimeout` | `test_timeout_maps_to_timeout_reason` | `WriteConverterTimeout` raise → `ConversionFailReason.TIMEOUT` 매핑 |
+| `TestNLWriteConverterTimeout` | `test_other_exception_still_parse_error` | timeout 외 예외는 기존대로 `PARSE_ERROR` fallback (회귀) |
+| `TestNLWriteConverterTimeout` | `test_timeout_emits_audit_and_releases_lock` | end-to-end timeout 시 audit `reason=timeout` 발사 + `_nl_turn_lock` release |
+| `TestNLWriteConverterTimeout` | `test_make_write_converter_wraps_timeout` | `make_write_converter` 래퍼가 `asyncio.wait_for` 호출 + 초과 시 `WriteConverterTimeout` raise |
+
+### 9.7 재검증 판정
+
+**QA = PASS (재검증)**. fix 3/3 통과. 신규 회귀 테스트 7/7 통과. 누적 dev_relay 회귀 710/710 통과. 컴플라이언스 60/60 통과 — 0 hit. 라벨 갱신: `impl-ready` → `qa-passed`.
+
+기존 §8 판정은 유지되되, AC-WTN-7 진술 정합성이 본 fix 로 회복됐다는 점이 핵심 보완. reviewer P1 지적 사항 (chain dangling / busy 동시 노출 / SDK hang) 이 모두 회귀 가능한 형태로 해소.
