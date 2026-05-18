@@ -21,5 +21,9 @@ model: inherit
 ## 산출물 규약
 - 최종 응답 한 줄: `결과: approved|changes-requested | 주요 이슈: <짧은 요약>`
 
+## HANDOFF 점검 (머지 직전 필수)
+- `qa-passed` 라벨이 붙은 시점에 PR feature 브랜치에 자동 commit 된 `docs/HANDOFF.md` 항목이 PR diff 에 포함된다. 머지 승인 전 (a) **사실관계**, (b) **"다음 작업 후보" 적절성** 두 가지를 점검한다.
+- 부적절하면 PR 에서 직접 수정 후 승인 (별도 PR 만들지 않음). HANDOFF 자체가 누락됐다면 (workflow 미동작 / `## 다음 작업` 섹션 부재) 작성자에게 보강 요청.
+
 ## 참고
 - `docs/rules/review.md`, `AGENTS.md`의 **Code Reviewer: 리뷰 게이트** 절.
