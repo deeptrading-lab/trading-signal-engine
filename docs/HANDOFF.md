@@ -772,3 +772,42 @@
   > - `_spawn_write_worker` 가 wrapper closure 로 add/discard 자동 수행.
   > - 신규 `_join_active_write_workers(timeout, logger)` — timeout 을 thread 수로 공평 배분, hang 한 thread 가 다른 thread join 을 막지 않음. join timeout 초과 thread 는 로그 warning + daemon 강제 회수에 위임.
 - **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
+
+### 2026-05-18 — feat(dev-relay): Phase 3 NL 자율 트리거 — write 의도 분류 + structured 변환 (AC-WT-7 해소) (#59)
+
+- **slug**: `dev-relay-write-tools-nl-impl` · **author**: @HY0118
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/59
+- **요약**: feat(dev-relay): Phase 3 NL 자율 트리거 — write 의도 분류 + structured 변환 (AC-WT-7 해소)
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 요약
+  > 
+  > PRD [`docs/prd/dev-relay-write-tools-nl.md`](../blob/main/docs/prd/dev-relay-write-tools-nl.md) (#58) AC-WTN-1~15 구현. PR #54 의 **AC-WT-7 (NL 자율 트리거 DEFERRED) 를 본 PR 로 완전 해소**.
+  > 
+  > ## 격차 해소
+  > 
+  > 기존 Phase 2 (PR #54) 까지의 NL 분기는 read-only 도구만 다뤘다. 사용자가 NL 으로 patch / commit / push 의도를 표현해도 봇이 안내만 하고 끝났다. 본 PR 은 다음을 추가한다:
+  > 
+  > - 자연어 → `WRITE_REQUEST` 라벨 분류 (기존 `nl_classifier` 확장).
+  > - Sonnet 4.6 변환 SDK → strict JSON 출력 (`{tool, pr, confidence}`).
+  > - 검증 통과 시 dispatcher 정규식 매치 가능 문자열 합성 (예: `apply patch pr=32`).
+  > - Phase 2 `_handle_write_command` 그대로 재진입 → dry-run + 2단계 confirm + 적용.
+  > - 변환 투명성 — confirm 다이얼로그에 NL 원문 + 변환된 structured 명령 표시.
+  > 
+  > ## AC 매핑 (15/15)
+  > 
+  > | AC | 검증 위치 | 상태 |
+  > |---|---|---|
+  > | AC-WTN-1 (`WRITE_REQUEST` 분류) | `test_write_tools_nl.py::TestWriteRequestLabel` + `TestNLWriteHappyPath` | PASS |
+  > | AC-WTN-2 (NL → structured 변환) | `TestParseConversionResponse` + `TestNLWriteHappyPath` | PASS |
+  > | AC-WTN-3 (Phase 2 재진입) | `TestNLWriteHappyPath::test_write_request_routes_to_conversion` | PASS |
+  > | AC-WTN-4 (모호 거절) | `TestNLWriteAmbiguous` (4 케이스 parametrize) | PASS |
+  > | AC-WTN-5 (confirm 취소) | Phase 2 `test_write_command_flow.py` 회귀 — 0 fail | PASS |
+  > | AC-WTN-6 (destructive 다층) | `TestNLWriteDestructiveGuard` (NL 입력 + 분류 fallback) | PASS |
+  > | AC-WTN-7 (동시성) | `TestNLTurnLockRegression` + 기존 NL serialize 테스트 0 fail | PASS |
+  > | AC-WTN-8 (shutdown) | Phase 2 `test_shutdown_dev_relay.py` 회귀 — write_shutdown_flag 정합 | PASS |
+  > | AC-WTN-9 (멱등성) | `TestNLWriteIdempotency::test_duplicate_client_msg_id_one_queue_row` | PASS |
+  > | AC-WTN-10 (rate limit) | `TestNLWriteRateLimit` | PASS |
+  > | AC-WTN-11 (audit 완전성) | `TestNLWriteHappyPath` — 4 종 신규 kind + Phase 2 chain | PASS |
+  > | AC-WTN-12 (PRD 산문 스캔) | `test_compliance.py::test_prd_write_tools_nl_body_outside_code_is_clean` | PASS |
+- **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
