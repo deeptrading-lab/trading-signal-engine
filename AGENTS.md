@@ -235,7 +235,7 @@ gh label create prd-requested prd-ready design-ready impl-wip impl-ready \
 - **리뷰어 독립성**: PR 작성자와 다른 사람(또는 별도 cmux 패널/워크트리의 Reviewer 에이전트)이 리뷰. 본인 PR 자가-승인 금지.
   - **단일 운영자 MVP 단계 (현재)**: GitHub가 self-approval API를 차단해 같은 사용자가 자기 PR에 `--approve` 불가. 이때는 별도 cmux 패널의 Reviewer 에이전트가 검증한 뒤 `--comment` + `review-approved` 라벨로 게이트를 표시한다(허용 범위). 라벨이 머지 게이트 역할을 한다.
   - **다중 사용자 / 외부 PR 도입 트리거**: 아래 중 하나라도 충족되면 별도 GitHub 계정(bot account 또는 별도 사용자)으로 reviewer를 분리해 실제 `--approve`로 전환한다.
-    - 다른 사람이 봇 화이트리스트(`ai/dev_relay/auth.py`)에 추가될 때
+    - 다른 사람이 dev-manager-bot 화이트리스트(별도 레포 `HY0118/dev-manager-bot` 의 `ai/dev_relay/auth.py`)에 추가될 때
     - 외부 컨트리뷰터 PR(예: 봇 운영자 외 사용자가 만든 PR)을 정식 파이프라인에 편입할 때
     - self-review 누적이 운영 부담으로 인식될 때(예: 단일 세션에서 6건 이상 누적되어 자동화·통계 가시성이 떨어지는 경우)
   - **공통 원칙**: 단계와 무관하게 자기 PR에 대한 `--approve` 직접 호출은 금지. 라벨 게이트와 실제 reviewer 의사 표시는 반드시 일치해야 한다.
