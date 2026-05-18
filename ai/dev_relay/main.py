@@ -652,6 +652,34 @@ def _handle_nl_write_conversion(
         )
         return
 
+    # PR #59 reviewer P1-1 — Phase 2 structured 경로와 동일한 `running_count >= 1`
+    # busy 게이트를 NL 변환 경로 진입 직전에 적용. AC-WTN-7 ("Phase 2 흐름 재사용")
+    # 보장 + structured + NL 혼합 시 confirm 다이얼로그 동시 노출 차단.
+    # SDK 호출 이전 단계에서 차단해 토큰 낭비도 회피한다. `_nl_turn_lock` 은 NL 끼리만
+    # 직렬화하므로 structured running 상태와는 독립 — 본 게이트가 그 갭을 메운다.
+    running_count = queue.count_by_status("running")
+    if running_count >= 1:
+        pending_count = queue.count_by_status("pending")
+        logger.info(
+            "nl write: running_count=%d — apply structured busy gate", running_count
+        )
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "nl_write_conversion_failed",
+                "thread_ts": thread_ts,
+                "user_id_masked": masked,
+                "reason": "busy",
+            }
+        )
+        safe_say(
+            say,
+            TEMPLATE_QUEUE_BUSY.format(pending=pending_count),
+            logger,
+            context="nl_write_busy",
+        )
+        return
+
     # PRD §3.2.1 단계 1~3 — 변환 + 검증.
     result = convert(user_text, converter=write_converter)
     if isinstance(result, ConversionRejection):
