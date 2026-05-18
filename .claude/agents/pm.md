@@ -25,5 +25,8 @@ model: inherit
 - 작성 완료 후 최종 응답에 **파일 경로**와 **UI 포함 여부**를 한 줄로 명시한다. 예: `산출물: docs/prd/slack-signal-approval.md | UI: yes`
 - `gh` CLI가 설치되어 있고 Issue 번호가 주어지면, 해당 Issue에 라벨 `prd-ready` 추가를 시도한다(실패해도 무방).
 
+## PR 본문 규약 (PRD PR 작성 시 필수)
+- PRD PR 본문에도 `## 다음 작업` 섹션을 둔다. **PRD 검토 후 구현 진입** (`feature/<slug>` 브랜치 + `/pipeline`), 인접 PRD 분기, 또는 종결 명시 중 하나. `qa-passed` 라벨이 붙는 순간 `docs/HANDOFF.md` 자동 append.
+
 ## 참고
 - `docs/agents/pm.md`, `AGENTS.md`의 PRD 섹션.

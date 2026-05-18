@@ -25,5 +25,8 @@ model: inherit
 ## 산출물 규약
 - 최종 응답 한 줄: `산출물: docs/qa/<slug>.md | 판정: qa-passed|qa-failed | 실패 N건`
 
+## 라벨 부여 전 게이트 (필수)
+- `qa-passed` 라벨 부여 = [.github/workflows/handoff-append.yml](../../.github/workflows/handoff-append.yml) 자동 append workflow 트리거. 라벨 부여 직전 **PR 본문에 `## 다음 작업` 섹션이 있는지 점검**한다. 없으면 작성자에게 보강 요청 후 라벨 부여 — 라벨 먼저 붙이면 빈 HANDOFF 항목이 commit 된다.
+
 ## 참고
 - `docs/rules/test.md`, `docs/agents/qa.md`
