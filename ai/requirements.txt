@@ -22,10 +22,8 @@ openai>=2.36.0
 fastapi>=0.115
 uvicorn[standard]>=0.32
 
-# 로컬 개발 협업 릴레이 데몬(Claude Agent SDK 호출 래퍼).
-# PRD: docs/prd/slack-dev-relay.md (§3.2)
-# PyPI 최신 안정판 0.1.72 기준. 0.1.x 마이너 시리즈 호환을 위해 하한만 고정.
-claude-agent-sdk>=0.1.72,<0.2
+# dev-relay 봇은 별도 레포 HY0118/dev-manager-bot 으로 분리됨.
+# claude-agent-sdk 의존성은 그 쪽 requirements.txt 에 둡니다.
 
 # 개발·테스트 의존성 (pytest 는 테스트 실행 시 필요).
 pytest>=8.0

@@ -232,7 +232,7 @@ ai/coordinator/
 
 미구현:
 - 명령 → ai/ 파이프라인 또는 backend/ 모듈 호출 연동
-- 슬래시 커맨드, Block Kit 인터랙티브 컴포넌트 (개발 협업 봇은 별도 PRD `slack-dev-relay`)
+- 슬래시 커맨드, Block Kit 인터랙티브 컴포넌트 (개발 협업 봇은 별도 레포 `HY0118/dev-manager-bot` 으로 분리됨)
 - 클라우드 배포 (Cloud Run / Lambda 등 — Socket Mode 대신 HTTP webhook으로 전환)
 - macOS launchd 자동 시작 (PC 부팅 시 데몬 자동 기동)
 
