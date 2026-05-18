@@ -768,8 +768,22 @@ def _handle_nl_write_conversion(
         command=parsed.normalized,
     )
     if not created:
+        # PR #59 reviewer P1-2 — duplicate idempotency key 차단 시 `nl_write_converted`
+        # 만 남고 후속 audit 없는 dangling chain 문제. `nl_write_dup_ignored` 1줄로
+        # chain 닫기. 다운스트림 분석에서 "변환 후 어떻게 됐는지" 추적 가능.
         logger.info(
             "nl write: duplicate event — queue row 1건 유지 (job_id=%d)", job.id
+        )
+        _append_audit(
+            {
+                "ts": _now_kst(),
+                "kind": "nl_write_dup_ignored",
+                "thread_ts": thread_ts,
+                "user_id_masked": masked,
+                "job_id": job.id,
+                "tool": result.tool,
+                "pr": result.pr_number,
+            }
         )
         return  # AC-WTN-9: 멱등성. 두 번째 이벤트는 무응답.
 
