@@ -18,10 +18,10 @@ tracker = CostTracker(budget_usd=10.0)
 
 # LLM 호출 (모델 라우팅·캐싱·재시도·비용 추적 자동)
 response, tracker = invoke_llm(
-    prompt="종목 분석해줘",
+    prompt="비트코인 배분 상태를 분석해줘",
     items=[...],
     tracker=tracker,
-    system_prompt="당신은 증권 분석가입니다.",
+    system_prompt="당신은 비트코인 리스크 분석가입니다.",
     force=None,  # 강제 모델 지정 가능
 )
 
@@ -52,4 +52,3 @@ response, tracker = invoke_llm(
 - 단가 테이블은 `ai.llm.pricing` 상수로 분리 (변동 시 해당 파일만 수정)
 - LangGraph 노드는 `(state, tracker) -> (state, tracker)` 패턴 권장
 - 예산 초과 여부는 호출자에게 전파 (파이프라인 즉시 중단)
-

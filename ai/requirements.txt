@@ -14,13 +14,8 @@ slack-bolt>=1.18
 python-dotenv>=1.0
 
 # OpenAI Responses API SDK.
-# PRD: docs/prd/ai-signal-workbench.md
+# PRD: docs/prd/bitcoin-allocation-mvp.md
 openai>=2.36.0
-
-# FastAPI 기반 workbench API.
-# PRD: docs/prd/ai-signal-workbench.md
-fastapi>=0.115
-uvicorn[standard]>=0.32
 
 # dev-relay 봇은 별도 레포 HY0118/dev-manager-bot 으로 분리됨.
 # claude-agent-sdk 의존성은 그 쪽 requirements.txt 에 둡니다.

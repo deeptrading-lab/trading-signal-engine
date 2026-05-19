@@ -1,19 +1,20 @@
 PYTHON ?= python
+SYMBOL ?= BTC
 TICKER ?= AAPL
 PORT ?= 8000
 
-.PHONY: help install daemon-coordinator signal signal-offline signal-workbench test test-coordinator test-stock-signal
+.PHONY: help install daemon-coordinator bitcoin-server signal signal-offline test test-coordinator test-bitcoin-signal
 
 help:
 	@echo "Available targets:"
 	@echo "  install            - Install Python dependencies (ai/requirements.txt)"
 	@echo "  daemon-coordinator - Run Hayoung AI Coordinator bot ($(PYTHON) -m ai.coordinator.main)"
-	@echo "  signal TICKER=XXX  - Generate a stock decision brief via free provider"
-	@echo "  signal-offline TICKER=XXX - Generate a brief with deterministic sample prices"
-	@echo "  signal-workbench   - Run FastAPI workbench API on http://127.0.0.1:$(PORT)"
+	@echo "  bitcoin-server     - Run local Bitcoin allocation HTTP server"
+	@echo "  signal SYMBOL=BTC  - Generate a Bitcoin allocation brief via free provider"
+	@echo "  signal-offline SYMBOL=BTC - Generate a brief with deterministic sample prices"
 	@echo "  test               - Run all pytest suites under ai/tests/"
 	@echo "  test-coordinator   - Run coordinator tests only"
-	@echo "  test-stock-signal  - Run stock signal MVP tests only"
+	@echo "  test-bitcoin-signal - Run Bitcoin allocation MVP tests only"
 	@echo ""
 	@echo "Override interpreter via PYTHON=... (default: python from active venv/PATH)."
 	@echo ""
@@ -25,14 +26,14 @@ install:
 daemon-coordinator:
 	$(PYTHON) -m ai.coordinator.main
 
+bitcoin-server:
+	$(PYTHON) -m ai.bitcoin_signal.server
+
 signal:
-	$(PYTHON) -m ai.stock_signal.cli $(TICKER)
+	$(PYTHON) -m ai.bitcoin_signal.cli $(SYMBOL)
 
 signal-offline:
-	$(PYTHON) -m ai.stock_signal.cli $(TICKER) --offline
-
-signal-workbench:
-	PORT=$(PORT) $(PYTHON) -m ai.stock_signal.server
+	$(PYTHON) -m ai.bitcoin_signal.cli $(SYMBOL) --offline
 
 test:
 	$(PYTHON) -m pytest ai/tests/ -v
@@ -40,5 +41,5 @@ test:
 test-coordinator:
 	$(PYTHON) -m pytest ai/tests/test_coordinator_*.py -v
 
-test-stock-signal:
-	$(PYTHON) -m pytest ai/tests/test_stock_signal.py ai/tests/test_stock_signal_workbench.py -v
+test-bitcoin-signal:
+	$(PYTHON) -m pytest ai/tests/test_bitcoin_signal.py -v
