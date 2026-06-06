@@ -3,7 +3,7 @@ SYMBOL ?= BTC
 TICKER ?= AAPL
 PORT ?= 8000
 
-.PHONY: help install daemon-coordinator bitcoin-server signal signal-offline test test-coordinator test-bitcoin-signal
+.PHONY: help install daemon-coordinator bitcoin-server signal signal-offline kr-news kr-news-sample test test-coordinator test-bitcoin-signal test-kr-stock-signal
 
 help:
 	@echo "Available targets:"
@@ -12,9 +12,12 @@ help:
 	@echo "  bitcoin-server     - Run local Bitcoin allocation HTTP server"
 	@echo "  signal SYMBOL=BTC  - Generate a Bitcoin allocation brief via free provider"
 	@echo "  signal-offline SYMBOL=BTC - Generate a brief with deterministic sample prices"
+	@echo "  kr-news SYMBOL=삼성전자 - Collect, summarize, and score Korean stock news via OpenAI"
+	@echo "  kr-news-sample SYMBOL=삼성전자 - Run Korean stock news scoring with deterministic sample data"
 	@echo "  test               - Run all pytest suites under ai/tests/"
 	@echo "  test-coordinator   - Run coordinator tests only"
 	@echo "  test-bitcoin-signal - Run Bitcoin allocation MVP tests only"
+	@echo "  test-kr-stock-signal - Run Korean stock news tests only"
 	@echo ""
 	@echo "Override interpreter via PYTHON=... (default: python from active venv/PATH)."
 	@echo ""
@@ -35,6 +38,12 @@ signal:
 signal-offline:
 	$(PYTHON) -m ai.bitcoin_signal.cli $(SYMBOL) --offline
 
+kr-news:
+	$(PYTHON) -m ai.kr_stock_signal.cli $(SYMBOL)
+
+kr-news-sample:
+	$(PYTHON) -m ai.kr_stock_signal.cli $(SYMBOL) --provider sample
+
 test:
 	$(PYTHON) -m pytest ai/tests/ -v
 
@@ -43,3 +52,6 @@ test-coordinator:
 
 test-bitcoin-signal:
 	$(PYTHON) -m pytest ai/tests/test_bitcoin_signal.py -v
+
+test-kr-stock-signal:
+	$(PYTHON) -m pytest ai/tests/test_kr_stock_signal.py -v

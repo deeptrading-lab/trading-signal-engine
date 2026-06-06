@@ -33,3 +33,8 @@ htmlcov/
 .env
 .env.*
 !.env.example
+
+# Local SQLite runtime data
+data/*.db
+data/*.sqlite
+data/*.sqlite3

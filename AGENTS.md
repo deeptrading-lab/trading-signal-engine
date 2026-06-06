@@ -3,7 +3,7 @@
 이 문서는 **사람과 AI 에이전트**가 이 저장소에서 일할 때 공통으로 따르는 **역할·순서·산출물**을 정의합니다.  
 제품·아키텍처 개요는 [README.md](./README.md)를 참고하세요.
 
-> ⚡ **모든 작업 시작 전 [docs/SESSION_NOTES.md](./docs/SESSION_NOTES.md)의 최신 1~2개 항목 + [docs/HANDOFF.md](./docs/HANDOFF.md)의 최근 5개 항목을 먼저 읽는다.** SESSION_NOTES 는 직전 세션의 사용자 합의·우선순위·미결 결정을 담고(자유서술), HANDOFF 는 PR 단위 자동 로그를 담는다. 둘은 보완 관계이며 어느 쪽도 건너뛰지 않는다. 사람이든 AI 에이전트든 동일하게 적용한다.
+> ⚡ **모든 작업 시작 전 [docs/SESSION_NOTES.md](./docs/SESSION_NOTES.md)의 최신 1~2개 항목 + [docs/HANDOFF.md](./docs/HANDOFF.md)의 최근 5개 항목을 먼저 읽는다.** SESSION_NOTES 는 직전 세션의 사용자 합의·우선순위·미결 결정을 담고(자유서술), HANDOFF 는 PR 단위 자동 로그를 담는다. 둘은 보완 관계이며 어느 쪽도 건너뛰지 않는다. 사람이든 AI 에이전트든 동일하게 적용한다. 사용자가 "오늘 뭐하지?", "다음에 뭐하지?", "현재 구현된 것 정리", "프로젝트 현황", "TODO", "next action"처럼 현재 상태나 다음 작업을 묻는 경우에는 [docs/PROJECT_STATUS.md](./docs/PROJECT_STATUS.md)도 함께 읽고, 그 파일의 TODO를 우선 기준으로 답한다.
 
 ---
 
@@ -14,6 +14,7 @@
 | **이 파일 (`AGENTS.md`)** | 프로세스·PRD·커밋·배포 기준의 **단일 본문**. GitHub·리뷰·온보딩에서 먼저 읽습니다. |
 | **`docs/HANDOFF.md`** | PR 단위 작업 인수인계 로그. PR 이 머지되면 GitHub Actions 가 자동 append. 작업 시작 전 최근 5개 항목을 읽는다. |
 | **`docs/SESSION_NOTES.md`** | 세션 단위 자유서술 메모. 사용자 합의·우선순위·미결 결정 등 자동화로 못 잡는 맥락을 담는다. 작업 시작 전 최신 1~2개 항목을 먼저 읽는다. |
+| **`docs/PROJECT_STATUS.md`** | 현재 구현 현황·알려진 공백·다음 TODO 상태판. 사용자가 오늘 할 일, 다음 작업, 프로젝트 현황을 물으면 먼저 읽고 답변 기준으로 삼는다. |
 | **`docs/agents/*.md`** | 다른 IDE/CLI에서도 활용 가능한 **역할별 공용 문서(원본)**. |
 | **`docs/rules/*.md`** | 다른 IDE/CLI에서도 활용 가능한 **규칙 공용 문서(원본)**. |
 | **`skills/**/SKILL.md`** | 다른 IDE/CLI에서도 활용 가능한 **스택별 공용 스킬(원본)**. |
@@ -25,11 +26,11 @@
 
 ---
 
-## 멀티 에이전트 역할 (7인 체제 + Manager)
+## 멀티 에이전트 역할 (백엔드 엔진 6인 체제 + Manager)
 
 한 대화 안에서도 역할을 명시해 전환합니다. 예: `역할: PM으로 PRD만 작성해줘`.
 
-각 에이전트는 **서로를 견제하고 보완**하는 구조입니다. 7개 역할은 항상 열려 있으며, PRD에서 요구하는 범위에 따라 필요한 역할이 합류합니다. (예: UI가 필요한 PRD라면 UX/UI·Frontend Dev도 MVP 단계에서 바로 합류합니다.)
+각 에이전트는 **서로를 견제하고 보완**하는 구조입니다. 이 저장소는 백엔드 엔진 프로젝트이므로 UX/UI·Frontend Dev 역할을 두지 않습니다. 화면·디자인 구현은 별도 프론트엔드 저장소에서 다루고, 이 저장소의 역할은 데이터 수집·저장·신호 산출·검증·운영에 집중합니다.
 
 ### Codex 운용 매핑
 
@@ -38,23 +39,22 @@ Codex에서는 별도 커스텀 에이전트 런타임보다 이 파일을 단�
 | Codex 역할 | 사용 시점 | 핵심 책임 |
 |---|---|---|
 | `planner` | 요구 정리·범위 확정 | PRD 초안, 수용 기준, 비범위 정리 |
-| `backend-worker` | `ai/`, `backend/` 구현 | Python 분석/LLM/Slack 흐름, 도메인 로직 구현 |
-| `frontend-worker` | UI가 포함된 작업 | PRD·디자인 문서 기준 화면/컴포넌트 구현 |
+| `data-news-worker` | 뉴스·가격 데이터 수집/저장 설계 | provider, ingestion, scoring schema, 비용/품질 가드 |
+| `backend-worker` | `ai/`, local API, DB 구현 | Python 분석/LLM/스케줄러/도메인 로직 구현 |
 | `qa-checker` | 구현 후 검증 | PRD AC별 테스트 매핑, 자동/수동 검증 기록 |
 | `reviewer` | 머지 전 점검 | 범위 이탈, 보안, 구조, 테스트 누락 리뷰 |
 | `devops` | push·배포·운영 | 유효한 커밋만 push, CI/CD·알림·운영 점검 |
 
-Codex가 작업을 시작할 때는 먼저 `docs/SESSION_NOTES.md` 최신 1~2개와 `docs/HANDOFF.md` 최근 5개를 읽고, 구현 전에는 관련 `docs/rules/*.md`와 `docs/agents/*.md`를 함께 확인한다.
+Codex가 작업을 시작할 때는 먼저 `docs/SESSION_NOTES.md` 최신 1~2개와 `docs/HANDOFF.md` 최근 5개를 읽고, 구현 전에는 관련 `docs/rules/*.md`와 `docs/agents/*.md`를 함께 확인한다. 현재 구현 현황·오늘 할 일·다음 TODO를 묻는 요청에서는 추가로 `docs/PROJECT_STATUS.md`를 읽고, 그 파일의 `Today / Next TODO`를 우선 기준으로 삼은 뒤 SESSION_NOTES/HANDOFF 맥락으로 보정한다.
 
 | # | 역할 | 하는 일 | 하지 않는 일(원칙) |
 |---|------|-----------|---------------------|
 | 1 | **PM (기획)** | 비즈니스 가치·비용 판단, 사용자 요구를 **PRD**로 정리해 개발에 넘김 | 구현·커밋·push |
-| 2 | **UX/UI 디자이너** | 유저 시나리오 설계, **디자인 시스템 가이드**(shadcn/ui 등) 제공 | 코드 구현·머지 승인 |
-| 3 | **Frontend Dev** | 디자이너 가이드에 맞춰 **UI 컴포넌트 구현**, 디자인 시스템 준수 | 디자인 의사결정 임의 변경 |
-| 4 | **Backend Dev** | `ai/`(Python) 분석·파이프라인, `backend/`(Kotlin) 주문·리스크 구현. **한글 요약** 커밋 | PRD 없이 범위 임의 확장 |
-| 5 | **QA (검증)** | PRD의 **수용 기준(AC)** → 테스트 항목·체크리스트 → 실행. 에지 케이스(예: 거래소 서버 다운) 포함 | PRD와 무관한 임의 테스트만으로 통과 판정 |
-| 6 | **Code Reviewer** | PR의 **코드 퀄리티·아키텍처·클린 코드** 감시, 머지 승인 게이트 | PRD 수용 테스트 실행(= QA 영역) |
-| 7 | **DevOps (배포)** | **유효한 커밋**일 때만 `git push`, CI/CD·운영 모니터링, **Slack 알림/인프라 비용** 관리 | 실패한 테스트·깨진 빌드 상태에서 push |
+| 2 | **Data/News Analyst** | 종목·가격·뉴스 source, 점수화 기준, DB 저장 feature, 비용 가드 설계 | 최종 매수/매도 로직 임의 구현·PRD 밖 source 추가 |
+| 3 | **Backend Dev** | `ai/` Python 엔진, local API, scheduler, DB repository 구현. **한글 요약** 커밋 | PRD 없이 범위 임의 확장 |
+| 4 | **QA (검증)** | PRD의 **수용 기준(AC)** → 테스트 항목·체크리스트 → 실행. 에지 케이스(예: 뉴스 API 장애·가격 provider 장애·DB lock) 포함 | PRD와 무관한 임의 테스트만으로 통과 판정 |
+| 5 | **Code Reviewer** | PR의 **코드 퀄리티·아키텍처·클린 코드** 감시, 머지 승인 게이트 | PRD 수용 테스트 실행(= QA 영역) |
+| 6 | **DevOps (배포)** | **유효한 커밋**일 때만 `git push`, 로컬/원격 실행·스케줄러·비용 모니터링 관리 | 실패한 테스트·깨진 빌드 상태에서 push |
 | + | **Manager (관찰·보고)** | 전체 slug 현황·블록·우선순위를 **read-only**로 조회해 리포트. `/status` 커맨드 진입점. | 라벨 변경·머지·파일 쓰기·다른 에이전트 실행 트리거 |
 
 ### 권장 흐름
@@ -62,9 +62,9 @@ Codex가 작업을 시작할 때는 먼저 `docs/SESSION_NOTES.md` 최신 1~2개
 ```text
 요구 → PM(PRD)
         ↓
-   UX/UI(시나리오·디자인)   ← UI 작업이 PRD에 포함될 때
+   Data/News(데이터·뉴스 source와 점수화 설계)
         ↓
-   Frontend Dev / Backend Dev (구현 + 한글 요약 commit)
+   Backend Dev (엔진·DB·API·스케줄러 구현 + 한글 요약 commit)
         ↓
    QA (항목 정리 + 실행)
         ↓
@@ -77,7 +77,7 @@ Codex가 작업을 시작할 때는 먼저 `docs/SESSION_NOTES.md` 최신 1~2개
 
 ## PRD (PM 산출물)
 
-Backend/Frontend Dev·QA·Code Reviewer가 동일한 기준을 쓰도록 PRD는 아래를 **채워서** 작성합니다.
+Data/News Analyst·Backend Dev·QA·Code Reviewer가 동일한 기준을 쓰도록 PRD는 아래를 **채워서** 작성합니다.
 
 1. **배경 / 문제** — 왜 하는가  
 2. **목표** — 무엇이 달라지면 성공인가  
@@ -87,27 +87,25 @@ Backend/Frontend Dev·QA·Code Reviewer가 동일한 기준을 쓰도록 PRD는 
 6. **가정·제약** — 기술·일정·비용 등  
 7. **참고** — 링크, 이슈 번호, 관련 파일 경로  
 
-PM은 PRD만 전달하고, 개발자(Frontend/Backend)는 **PRD에 없는 기능을 임의로 넣지 않습니다.** 모호하면 PM에게 되물은 뒤 PRD를 갱신합니다.
+PM은 PRD만 전달하고, Data/News Analyst와 Backend Dev는 **PRD에 없는 source·schema·API·신호 로직을 임의로 넣지 않습니다.** 모호하면 PM에게 되물은 뒤 PRD를 갱신합니다.
 
 ---
 
-## UX/UI 디자이너 산출물
+## Data/News Analyst 산출물
 
-UI·유저 인터랙션이 PRD에 포함될 때 합류합니다.
+뉴스·가격·공시·거래 데이터가 PRD에 포함될 때 합류합니다.
 
-- **유저 시나리오**: 주요 태스크 플로우(예: 신호 확인 → 승인 → 주문 실행)
-- **디자인 시스템 가이드 (DESIGN.md 포맷 필수)**:
-  - 단일 진실 소스: 모든 `docs/design/<slug>.md`는 [Google Labs **DESIGN.md**](https://github.com/google-labs-code/design.md) 포맷을 따릅니다. 포맷 상세는 [`docs/rules/design-md.md`](docs/rules/design-md.md) 참조.
-  - YAML front matter에 토큰(`colors`, `typography`, `rounded`, `spacing`, `components`)을 정의하고, 본문은 표준 섹션 순서(Overview → Colors → Typography → Layout → Elevation & Depth → Shapes → Components → Do's and Don'ts)로 작성합니다.
-  - 색·간격은 토큰 참조(`{colors.primary}`)로만 연결합니다. 코드·컴포넌트에 hex/px를 직접 박지 않습니다.
-- **검증**: 산출 직전 `npx @google/design.md lint docs/design/<slug>.md`를 실행하고 **error 0건**을 확인합니다. lint 요약을 PR/응답에 첨부합니다.
-- **핸드오프 산출물**: Frontend Dev가 바로 구현할 수 있는 수준의 명세(스펙·상태·에러 케이스 포함). Frontend는 front matter의 토큰을 그대로 사용합니다.
+- **데이터 source 설계**: provider 후보, 비용, rate limit, 장애 fallback, 저장 필요성, 보존 기간.
+- **뉴스 점수화 기준**: sentiment/impact/relevance/novelty/risk tag 정의와 LLM structured output schema.
+- **DB feature 설계**: 원문 대신 저장할 압축 feature, 중복 제거 key, aggregation window, decay 정책.
+- **검증 기준**: provider 장애, schema validation 실패, 중복 뉴스, 비용 한도 초과, stale data 처리.
+- **핸드오프 산출물**: Backend Dev가 바로 구현할 수 있는 source 목록, schema 초안, scoring rule, edge case.
 
-디자이너는 코드 커밋·머지 승인을 하지 않습니다. Frontend Dev가 가이드를 따르지 않는다고 판단되면(예: 토큰 미사용, 임의 hex) Code Reviewer와 함께 변경을 요청합니다.
+Data/News Analyst는 코드 구현·커밋·머지 승인을 하지 않습니다. 새 외부 source나 점수화 정책이 필요하면 PRD 또는 별도 데이터 설계 문서에 명시합니다.
 
 ---
 
-## 개발자 (Backend / Frontend): 커밋 메시지 (한글·요점만)
+## 개발자 (Backend): 커밋 메시지 (한글·요점만)
 
 - **언어**: 한글  
 - **길이**: 제목 한 줄 위주; 필요 시 본문은 불릿 2~5줄 이내  
@@ -164,8 +162,8 @@ UI·유저 인터랙션이 PRD에 포함될 때 합류합니다.
 
 ## Cursor 사용 시 팁
 
-- 큰 작업은 `PM → (UX/UI →) Frontend/Backend Dev → QA → Code Reviewer → DevOps` 순으로 **한 번에 한 역할**을 요청하면 산출물이 섞이지 않는다.  
-- “PRD 초안만”, “이 PRD로 구현만”, “PRD 기준 테스트 계획만”, “PR 리뷰만”처럼 **출력물을 한 가지로 제한**한다.
+- 큰 작업은 `PM → Data/News → Backend Dev → QA → Code Reviewer → DevOps` 순으로 **한 번에 한 역할**을 요청하면 산출물이 섞이지 않는다.
+- “PRD 초안만”, “데이터 source 설계만”, “이 PRD로 구현만”, “PRD 기준 테스트 계획만”, “PR 리뷰만”처럼 **출력물을 한 가지로 제한**한다.
 - 역할·스택 힌트: `docs/agents/`의 해당 파일을 열어 두거나, 메시지에 `역할: QA`처럼 명시한다.
 
 ---
@@ -177,9 +175,8 @@ UI·유저 인터랙션이 PRD에 포함될 때 합류합니다.
 | 역할 | 입력 | 출력 | 트리거 (라벨/상태) | 다음 |
 |------|------|------|--------------------|------|
 | PM | 사용자 아이디어, GitHub Issue | `docs/prd/<slug>.md` + Issue 업데이트 | 라벨 `prd-requested` | `prd-ready` |
-| UX/UI | `docs/prd/<slug>.md` (UI 포함 시) | `docs/design/<slug>.md` | 라벨 `prd-ready` + PRD에 UI 범위 | `design-ready` |
-| Backend Dev | `docs/prd/<slug>.md` | 브랜치 `feature/<slug>` + PR | 라벨 `prd-ready` / `design-ready` | PR + `impl-ready` |
-| Frontend Dev | `docs/prd/<slug>.md` + `docs/design/<slug>.md` | 브랜치 `feature/<slug>` + PR | 라벨 `design-ready` | PR + `impl-ready` |
+| Data/News | `docs/prd/<slug>.md` | `docs/data/<slug>.md` (필요 시) | 라벨 `prd-ready` + 데이터 source/뉴스/DB 범위 | `data-ready` |
+| Backend Dev | `docs/prd/<slug>.md` + `docs/data/<slug>.md` (있을 때) | 브랜치 `feature/<slug>` + PR | 라벨 `prd-ready` / `data-ready` | PR + `impl-ready` |
 | QA | PRD + PR diff | `docs/qa/<slug>.md` | 라벨 `impl-ready` | `qa-passed` / `qa-failed` |
 | Code Reviewer | PR diff + `docs/qa/<slug>.md` | PR 리뷰 코멘트 | 라벨 `qa-passed` | `review-approved` / `review-changes-requested` |
 | DevOps | 승인된 PR | 머지 + push + Slack 알림 | 라벨 `review-approved` | `devops-ready` |
@@ -192,7 +189,7 @@ UI·유저 인터랙션이 PRD에 포함될 때 합류합니다.
 ```
 docs/
 ├── prd/<slug>.md         # PM 산출물
-├── design/<slug>.md      # UX/UI 산출물 (UI 있을 때만)
+├── data/<slug>.md        # Data/News 산출물 (데이터 source·뉴스·DB 설계 필요 시)
 └── qa/<slug>.md          # QA 리포트
 ```
 
@@ -203,7 +200,7 @@ docs/
 두 사람이 동시에 일할 때 **어느 단계인지**를 Issue/PR 라벨로 표시한다. 에이전트는 `gh` CLI로 라벨을 읽고 쓴다.
 
 ```
-prd-requested → prd-ready → design-ready → impl-wip → impl-ready
+prd-requested → prd-ready → data-ready → impl-wip → impl-ready
               → qa-pending → qa-passed     (실패 시 qa-failed → impl-wip 로 회귀)
               → review-pending → review-approved (또는 review-changes-requested → impl-wip)
               → devops-ready (DevOps가 머지·push 후 제거)
@@ -212,7 +209,7 @@ prd-requested → prd-ready → design-ready → impl-wip → impl-ready
 필수 라벨(`gh label create`로 1회 생성):
 
 ```bash
-gh label create prd-requested prd-ready design-ready impl-wip impl-ready \
+gh label create prd-requested prd-ready data-ready impl-wip impl-ready \
   qa-pending qa-passed qa-failed \
   review-pending review-approved review-changes-requested devops-ready
 ```
@@ -226,7 +223,7 @@ gh label create prd-requested prd-ready design-ready impl-wip impl-ready \
 | 라벨 | 정의 | 예시 |
 |---|---|---|
 | `priority:P0` | 긴급 — 실제 버그 / 사용자 경험 직접 영향 / 보안 / 데이터 정합성 | 메시지 편집·삭제 시 봇이 오답 발사, 토큰 평문 누출, 인증 우회 |
-| `priority:P1` | 중요 — ROI 좋은 개선 / 다른 작업의 prerequisite / 자주 쓰는 UX 개선 | dotenv 자동 로딩, 다음 PRD가 의존하는 모듈화 |
+| `priority:P1` | 중요 — ROI 좋은 개선 / 다른 작업의 prerequisite / 자주 쓰는 운영·개발 경험 개선 | dotenv 자동 로딩, 다음 PRD가 의존하는 모듈화 |
 | `priority:P2` | 여유 — 코드 품질 / 기술 부채 / chore / 회귀 방지용 테스트 보강 | 미사용 import 정리, dispatcher 단위 테스트, 마이너 가드 보강 |
 
 ### 신규 이슈 생성 절차 (PM / DevOps / Reviewer 공통)
@@ -254,22 +251,24 @@ gh label create prd-requested prd-ready design-ready impl-wip impl-ready \
     - 외부 컨트리뷰터 PR(예: 봇 운영자 외 사용자가 만든 PR)을 정식 파이프라인에 편입할 때
     - self-review 누적이 운영 부담으로 인식될 때(예: 단일 세션에서 6건 이상 누적되어 자동화·통계 가시성이 떨어지는 경우)
   - **공통 원칙**: 단계와 무관하게 자기 PR에 대한 `--approve` 직접 호출은 금지. 라벨 게이트와 실제 reviewer 의사 표시는 반드시 일치해야 한다.
-- **slug 산출물은 feature 브랜치에**: `docs/prd/<slug>.md`, `docs/qa/<slug>.md`, `docs/design/<slug>.md` 등 특정 slug에 귀속되는 산출물은 그 slug의 `feature/<slug>` 브랜치에 commit한다. main에 직접 commit·push 금지. 메인 Claude가 sub-agent 산출물(QA 리포트 등)을 push할 때는 `git branch --show-current` 로 현재 브랜치를 먼저 확인하고, 잘못 main에 들어간 commit이 있으면 즉시 cherry-pick → reset 으로 정정한다.
+- **slug 산출물은 feature 브랜치에**: `docs/prd/<slug>.md`, `docs/data/<slug>.md`, `docs/qa/<slug>.md` 등 특정 slug에 귀속되는 산출물은 그 slug의 `feature/<slug>` 브랜치에 commit한다. main에 직접 commit·push 금지. 메인 Claude가 sub-agent 산출물(QA 리포트 등)을 push할 때는 `git branch --show-current` 로 현재 브랜치를 먼저 확인하고, 잘못 main에 들어간 commit이 있으면 즉시 cherry-pick → reset 으로 정정한다.
 
 ---
 
 ## 작업 인수인계 (HANDOFF + SESSION_NOTES)
 
-두 사람이 비동기로 작업하기 때문에 **누가 직전에 무엇을 머지했고 무엇이 남았는지** + **직전 세션이 무엇을 합의했는지**를 빠르게 따라잡는 장치가 필요하다. 두 파일이 분담한다.
+두 사람이 비동기로 작업하기 때문에 **누가 직전에 무엇을 머지했고 무엇이 남았는지** + **직전 세션이 무엇을 합의했는지** + **현재 제품 상태와 다음 TODO가 무엇인지**를 빠르게 따라잡는 장치가 필요하다. 세 파일이 분담한다.
 
 - [docs/HANDOFF.md](./docs/HANDOFF.md) — **PR 단위 자동 로그** (`qa-passed` 시점에 워크플로우가 append).
 - [docs/SESSION_NOTES.md](./docs/SESSION_NOTES.md) — **세션 단위 자유서술 메모**. 사용자 합의·우선순위·미결 결정·여러 PR 묶음 정리 등 PR 본문의 `## 다음 작업` 섹션으로 못 잡는 맥락을 담는다.
+- [docs/PROJECT_STATUS.md](./docs/PROJECT_STATUS.md) — **현재 구현 현황과 다음 TODO 상태판**. "오늘 뭐하지?", "다음에 뭐하지?", "프로젝트 현황", "TODO", "next action" 류 질문에 대한 1차 기준이다.
 
 - **시작 전**: 사람이든 AI 에이전트든 새 작업을 잡기 전 다음 두 가지를 먼저 읽는다.
   1. `docs/SESSION_NOTES.md` 의 **최신 1~2개 항목** — 직전 세션의 합의된 우선순위·미결 결정을 가장 먼저 인식.
   2. `docs/HANDOFF.md` 의 **최근 5개 항목** — 직전에 무엇이 머지·후속됐는지 보강.
   
   본인이 다시 돌아왔을 때도 동일하게 확인. 둘 중 한쪽만 읽으면 사용자 합의를 무시한 권고를 하게 된다(2026-05-06 사례).
+- **현황·다음 작업 질문**: 사용자가 "오늘 뭐하지?", "다음에 뭐하지?", "현재 구현된 것 정리", "프로젝트 현황", "TODO", "next action"처럼 묻는 경우 `docs/PROJECT_STATUS.md`를 추가로 읽는다. 답변은 `PROJECT_STATUS.md`의 `Today / Next TODO`를 먼저 기준으로 삼고, `SESSION_NOTES.md`와 `HANDOFF.md`의 최신 맥락으로 우선순위·보류 상태를 보정한다.
 - **자동 append (QA 통과 시점)**: PR에 `qa-passed` 라벨이 붙으면 [.github/workflows/handoff-append.yml](./.github/workflows/handoff-append.yml) 가 **해당 PR의 feature 브랜치 자체에** HANDOFF 항목을 commit한다. 별도의 chore PR을 만들지 않으므로 PR이 한 개로 유지되고, Reviewer가 머지 직전 HANDOFF 항목까지 한 번에 최종 점검한다.
 - **다음 작업 후보 자동 추출**: PR 본문에 `## 다음 작업` (또는 `## Next steps`, `## Follow-up`, `## 후속`) 섹션을 넣으면 그 내용이 HANDOFF에 자동 채워진다. **후보일 뿐 절대적 지시가 아니다.** 다음 작업자(사람·AI 모두)는 참고만 하고 우선순위·문맥에 따라 자유롭게 결정한다.
 - **머지 전 최종 점검**: Reviewer는 PR diff에서 HANDOFF 항목을 함께 검토한다. 사실관계·다음 작업 후보가 부적절하면 PR에서 직접 수정 후 머지한다.

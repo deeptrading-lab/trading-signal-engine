@@ -1,5 +1,6 @@
 # PRD: bitcoin-allocation-mvp
 
+- **상태**: Superseded. 2026-06-06 이후 신규 우선 방향은 `docs/prd/kr-stock-news-signal-mvp.md`의 국내 대형주 매수/매도 신호 엔진이다. 본 PRD는 기존 Bitcoin-only 구현 맥락과 재사용 가능한 구조 참고용으로 유지한다.
 - **slug**: `bitcoin-allocation-mvp`
 - **작성일**: 2026-05-18
 - **제품 방향**: 비트코인 전용 자산 배분 의사결정 브리핑

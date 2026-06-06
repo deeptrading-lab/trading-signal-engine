@@ -811,3 +811,73 @@
   > | AC-WTN-11 (audit 완전성) | `TestNLWriteHappyPath` — 4 종 신규 kind + Phase 2 chain | PASS |
   > | AC-WTN-12 (PRD 산문 스캔) | `test_compliance.py::test_prd_write_tools_nl_body_outside_code_is_clean` | PASS |
 - **다음 작업 후보**: _PR 본문에 별도 섹션 없음. 본문 참고하여 판단._
+
+### 2026-06-06 — docs: 프로젝트 구현 현황과 다음 TODO 상태판 backfill
+
+- **slug**: `project-status-backfill` · **author**: Codex
+- **PR**: _아직 없음 — 현재 작업 브랜치에서 문서 backfill 중_
+- **요약**: `docs/PROJECT_STATUS.md`를 추가해 현재 구현된 Bitcoin allocation engine 기능, 알려진 공백, 오늘/다음 TODO를 새 세션의 기준 문서로 정리했다. `AGENTS.md`에는 사용자가 "오늘 뭐하지?", "다음에 뭐하지?", "프로젝트 현황", "TODO", "next action"을 물을 때 `PROJECT_STATUS.md`를 추가로 읽고 그 TODO를 우선 기준으로 답하는 규칙을 추가했다.
+- **현재 상태**: 문서 backfill 진행 중. dev-relay 자산은 별도 레포 `HY0118/dev-manager-bot`로 분리되었고, 이 저장소의 현재 본업은 비트코인 전용 자산 배분 의사결정 엔진이다.
+- **다음 작업 후보**:
+  1. `docs/PROJECT_STATUS.md`의 `Today / Next TODO` 기준으로 `bitcoin-daily-persistence` PRD 작성.
+  2. 뉴스 snapshot / 일별 opinion DB schema와 09:00·12:00·15:00 JST refresh batch 설계.
+  3. 저장 결과 우선 조회 API와 morning brief service 구현 계획 수립.
+
+### 2026-06-06 — docs: 국내 대형주 뉴스 보조 신호 엔진 PRD 작성
+
+- **slug**: `kr-stock-news-signal-mvp` · **author**: Codex
+- **PR**: _아직 없음 — 현재 작업 브랜치에서 기획 문서 업데이트 중_
+- **요약**: 신규 우선 PRD `docs/prd/kr-stock-news-signal-mvp.md`를 추가했다. 방향은 삼성전자·SK하이닉스·현대차 watchlist에 대해 가격/거래량 중심 신호를 만들고, 당일 뉴스는 검색·요약·점수화 후 DB에 저장해 최근 10일 보조 feature로만 사용하는 구조다. Codex CLI 주기 실행은 실험용 adapter로 가능하지만, MVP 기본 경로는 Python scheduler + OpenAI Responses API 직접 호출로 정리했다.
+- **현재 상태**: PRD 작성 완료. `docs/PROJECT_STATUS.md`와 `README.md`는 신규 국내 주식 엔진을 우선 방향으로 갱신했고, 기존 `bitcoin-allocation-mvp` PRD는 superseded 참고용으로 표시했다.
+- **다음 작업 후보**:
+  1. `ai/kr_stock_signal` 신규 패키지 골격과 SQLite repository/schema 구현.
+  2. 삼성전자·SK하이닉스·현대차 watchlist seed + 일봉 가격 provider adapter 구현.
+  3. OpenAI web search structured output 기반 뉴스 ingestion service와 `daily_news_scores` 집계 구현.
+  4. `make test-kr-stock-signal` 타깃과 PRD AC 매핑 테스트 추가.
+
+### 2026-06-06 — chore(agents): 백엔드 엔진 전용 agent 구성으로 정리
+
+- **slug**: `backend-engine-agent-config` · **author**: Codex
+- **PR**: _아직 없음 — 현재 작업 브랜치에서 agent 구성 문서 업데이트 중_
+- **요약**: 이 저장소가 백엔드 엔진 프로젝트라는 기준에 맞춰 UX/UI Designer와 Frontend Dev 역할을 제거하고, Data/News Analyst 역할을 추가했다. 현재 `.codex/agents` 기준 agent는 `pm`, `data-news`, `backend-dev`, `qa`, `reviewer`, `devops`, `manager` 총 7개다.
+- **현재 상태**: `AGENTS.md`, `docs/agents/*`, `.codex/agents/*`가 백엔드 엔진 흐름에 맞게 갱신됨. 핸드오프 라벨 흐름도 `design-ready` 대신 `data-ready`를 사용하도록 정리했다.
+- **다음 작업 후보**:
+  1. 필요 시 GitHub label에서 `data-ready`를 생성하고 더 이상 쓰지 않는 `design-ready`는 보류/정리 검토.
+  2. `docs/data/kr-stock-news-signal-mvp.md`를 Data/News Analyst 산출물로 작성.
+  3. 신규 `ai/kr_stock_signal` 구현 PR부터 `PM → Data/News → Backend Dev → QA → Reviewer → DevOps` 흐름 적용.
+
+### 2026-06-06 — feat(kr-stock): 국내 대형주 뉴스 보조 신호 엔진 MVP 골격 구현
+
+- **slug**: `kr-stock-news-signal-mvp` · **author**: Codex
+- **PR**: _아직 없음 — 사용자가 확인 후 commit/push 요청 예정_
+- **요약**: `ai/kr_stock_signal` 패키지를 추가해 삼성전자·SK하이닉스·현대차 watchlist, SQLite repository/schema, synthetic price provider, 뉴스 item validation/daily score/최근 10일 feature 집계, OpenAI web search provider 경계, ingestion service, signal engine, CLI, Makefile test target을 구현했다. 뉴스는 원문 재분석 없이 저장된 feature로만 신호에 보조 반영된다.
+- **현재 상태**: QA PASS. `.venv/bin/python -m pytest ai/tests/test_kr_stock_signal.py -v` → 8 passed. `.venv/bin/python -m pytest ai/tests/ -v` → 193 passed. CLI smoke: `.venv/bin/python -m ai.kr_stock_signal.cli 삼성전자 --cash-amount 1000000` 정상 출력.
+- **사용자 확인 필요**:
+  1. 실제 뉴스 ingestion을 위해 `OPENAI_API_KEY`를 `.env.local`에 넣을지 확인.
+  2. OpenAI 일일 비용 한도 `$0.50` 기본값 유지 여부 확인.
+  3. 실제 국내 주식 가격 provider를 Yahoo `.KS`, `pykrx`, 기타 source 중 무엇으로 할지 결정.
+  4. 원격 DB는 아직 불필요. MVP는 SQLite local file로 진행 가능.
+- **다음 작업 후보**:
+  1. 실제 가격 provider adapter 구현.
+  2. local HTTP API와 scheduler entrypoint 구현.
+  3. OpenAI API key 설정 후 real news ingestion 수동 검증.
+  4. 사용자 확인 후 commit/push 요청을 받으면 커밋·푸시 진행.
+
+### 2026-06-06 — fix(scope): 국내 주식 엔진을 뉴스 수집·요약·점수화 전용으로 정정
+
+- **slug**: `kr-stock-news-signal-mvp` · **author**: Codex
+- **PR**: _아직 없음 — 사용자가 확인 후 commit/push 요청 예정_
+- **요약**: 사용자가 "국내 주식 가격 provider는 frontend에 구현되어 있고, 이 엔진은 뉴스 수집·분석·요약·점수화만 담당"한다고 범위를 정정했다. 이에 따라 `ai/kr_stock_signal`에서 가격 provider, 기술 지표, 매수/매도 action, 추천 수량 계산, signal report 저장 흐름을 제거하고 뉴스 전용 SQLite schema(`watchlist_symbols`, `news_items`, `daily_news_scores`)와 ingestion/CLI/OpenAI provider 경계만 남겼다.
+- **현재 상태**: QA PASS. `.venv/bin/python -m pytest ai/tests/test_kr_stock_signal.py -v` → 6 passed. `.venv/bin/python -m pytest ai/tests/ -v` → 191 passed. `git diff --check` pass.
+- **실제 OpenAI smoke**: 사용자가 제공한 key를 파일에 저장하지 않고 일회성 환경 변수로만 사용해 삼성전자(`005930.KS`) 뉴스 수집/요약/점수화/SQLite 저장을 확인했다. 최종 smoke 결과는 1건 수집, weighted score 18.0, risk tags `product`, `supply_chain`. DB에는 source `뉴스핌`, URL `https://www.newspim.com/news/view/20260604000232`, published_at `2026-06-04`가 저장됐다.
+- **관찰 및 보강**: 실제 OpenAI 결과에서 유사 요약 반복과 허용 목록 밖 risk tag가 관찰되어 ingestion 단계 title/summary dedupe와 provider risk tag allowlist 필터를 추가했다. 검색 품질/source ranking은 후속 개선 필요.
+- **사용자 확인 필요**:
+  1. 반복 실행용 OpenAI key를 `.env.local` 또는 OS secret에 설정할지 결정.
+  2. 채팅에 노출된 API key는 운영용으로 계속 쓰기보다 새 key로 rotate 권장.
+  3. OpenAI 일일 비용 한도 `$0.50` 기본값 유지 여부 확인.
+  4. 원격 DB는 아직 필요 없음. MVP는 SQLite local file로 충분.
+- **다음 작업 후보**:
+  1. local HTTP API: news refresh/daily/feature 조회 endpoint.
+  2. scheduler: 08:30/12:30/16:10 `Asia/Seoul` 뉴스 refresh.
+  3. ingestion run log와 비용 한도 enforcement.
+  4. source 신뢰도/ranking, 중복 기사 grouping, retention cleanup.

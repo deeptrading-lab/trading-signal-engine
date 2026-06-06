@@ -347,3 +347,58 @@ A·F·B 모든 즉시 가능 트랙 종결. 다음 세션은 P2 누적 follow-up
 ### 미결·블록
 
 - 본 chore PR 후 즉시 가능 트랙 (A/F) 모두 정리됨. 다음 세션은 B-1 PRD (사용자 진입 필요) 또는 C-1 데이터 점검 (~2026-05-21) 자연 진입.
+
+---
+
+## 2026-06-06 — 국내 주식 뉴스 엔진 범위 확정 및 OpenAI smoke
+
+**요약**: 이 저장소의 신규 방향을 국내 주식 가격/수량 신호가 아니라 **뉴스 수집·요약·점수화 전용 백엔드 엔진**으로 정정했다. 국내 주식 가격 provider는 프론트엔드에 이미 있으므로 이 엔진에서는 구현하지 않는다. 삼성전자 OpenAI real smoke까지 완료했고, 사용자가 확인 후 commit/push를 요청했다.
+
+### 처리한 일
+
+- `docs/PROJECT_STATUS.md` 추가: 새 세션이 "현재 구현된 것"과 "오늘/다음 TODO"를 바로 알 수 있는 상태판.
+- `AGENTS.md` 갱신: UX/UI·Frontend 역할 제거, Data/News Analyst 추가, `PROJECT_STATUS.md` 읽기 규칙 추가.
+- `docs/prd/kr-stock-news-signal-mvp.md` 재작성: 국내 대형주 뉴스 수집·요약·점수화 전용 PRD. 가격 provider, 매수/매도 action, 추천 가격대/수량은 out of scope.
+- `docs/data/kr-stock-news-signal-mvp.md` 추가: watchlist, query template, structured output schema, score aggregation, SQLite storage, 사용자 준비사항 정리.
+- `ai/kr_stock_signal` 신규 패키지 추가:
+  - 삼성전자(`005930.KS`), SK하이닉스(`000660.KS`), 현대차(`005380.KS`) watchlist.
+  - SQLite tables: `watchlist_symbols`, `news_items`, `daily_news_scores`.
+  - `NewsIngestionService`, OpenAI provider, sample provider CLI.
+  - 뉴스 validation, daily score, 최근 10일 feature.
+  - OpenAI 응답의 유사 title/summary dedupe와 risk tag allowlist 필터.
+- `Makefile` 타깃 추가: `kr-news`, `kr-news-sample`, `test-kr-stock-signal`.
+- `.gitignore`에 local SQLite DB ignore 추가.
+- `docs/qa/kr-stock-news-signal-mvp.md` 추가 및 PASS 기록.
+- `docs/HANDOFF.md`에 project status backfill, agent 구성 변경, 뉴스 엔진 구현/범위 정정 항목 추가.
+
+### 검증 결과
+
+- `.venv/bin/python -m pytest ai/tests/test_kr_stock_signal.py -v` → 6 passed.
+- `.venv/bin/python -m pytest ai/tests/ -v` → 191 passed.
+- `git diff --check` → pass.
+- `PYTHON=.venv/bin/python make kr-news-sample SYMBOL=삼성전자` → pass.
+- OpenAI real smoke: 삼성전자(`005930.KS`) 뉴스 1건 수집/요약/점수화/SQLite 저장 성공. 최종 smoke 결과 weighted_score `18.0`, risk_tags `product`, `supply_chain`.
+
+### 결정·합의 사항
+
+- 국내 주식 가격 provider는 프론트엔드 담당.
+- 이 엔진은 뉴스 검색, 분석, 요약, 점수화, 저장, 조회 API/scheduler만 담당.
+- 뉴스 점수는 이미 주가에 선반영될 수 있으므로 보조 feature로만 사용한다.
+- OpenAI API key는 파일에 저장하지 않고 smoke test에는 일회성 환경 변수로만 사용했다.
+- MVP DB는 SQLite local file로 충분하며, 원격 DB 가입은 아직 필요 없다.
+
+### 다음 작업 후보
+
+1. local HTTP API 구현:
+   - `POST /api/kr-stocks/news/refresh`
+   - `GET /api/kr-stocks/news/daily`
+   - `GET /api/kr-stocks/news/feature`
+2. scheduler 구현: 08:30/12:30/16:10 `Asia/Seoul` 뉴스 refresh.
+3. ingestion run log와 비용 한도 enforcement.
+4. source 신뢰도/ranking, 중복 기사 grouping, retention cleanup.
+
+### 사용자 필요 작업
+
+- 채팅에 노출된 OpenAI key는 운영용으로 계속 쓰기보다 새 key로 rotate 권장.
+- 반복 실행을 원하면 새 key를 `.env.local` 또는 OS secret에 설정.
+- OpenAI 일일 비용 한도 `$0.50` 기본값 유지 여부 결정.
