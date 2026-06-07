@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Protocol
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from .models import DailyNewsScore, NewsItem
 from .watchlist import WATCHLIST
@@ -210,3 +215,186 @@ class KrStockRepository:
             )
             for row in rows
         ]
+
+
+class NewsRepository(Protocol):
+    def initialize(self) -> None: ...
+
+    def upsert_news_items(self, items: Iterable[NewsItem]) -> None: ...
+
+    def upsert_daily_news_score(self, score: DailyNewsScore) -> None: ...
+
+    def fetch_daily_news_scores(self, symbol: str, *, limit: int = 10) -> list[DailyNewsScore]: ...
+
+
+class SupabaseRepository:
+    def __init__(self, url: str, secret_key: str, *, timeout: float = 15.0) -> None:
+        self.url = url.rstrip("/")
+        self.secret_key = secret_key
+        self.timeout = timeout
+
+    @classmethod
+    def from_env(cls) -> "SupabaseRepository":
+        url = os.getenv("SUPABASE_URL", "").strip()
+        secret_key = (
+            os.getenv("SUPABASE_SECRET_KEY", "").strip()
+            or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+        )
+        if not url:
+            raise ValueError("SUPABASE_URL is not configured")
+        if not secret_key:
+            raise ValueError("SUPABASE_SECRET_KEY is not configured")
+        if secret_key.startswith("sb_publishable_"):
+            raise ValueError("Supabase publishable key cannot be used for backend writes")
+        return cls(url, secret_key)
+
+    def initialize(self) -> None:
+        rows = [
+            {
+                "symbol": item.symbol,
+                "name_ko": item.name_ko,
+                "market": item.market,
+                "enabled": True,
+            }
+            for item in WATCHLIST.values()
+        ]
+        self._request(
+            "watchlist_symbols",
+            method="POST",
+            payload=rows,
+            query={"on_conflict": "symbol"},
+            prefer="resolution=merge-duplicates,return=minimal",
+        )
+
+    def upsert_news_items(self, items: Iterable[NewsItem]) -> None:
+        rows = [
+            {
+                "id": news_item_id(item),
+                "symbol": item.symbol,
+                "published_at": item.published_at,
+                "source": item.source,
+                "title": item.title,
+                "url": item.url,
+                "summary_ko": item.summary_ko,
+                "sentiment_score": item.sentiment_score,
+                "impact_score": item.impact_score,
+                "relevance_score": item.relevance_score,
+                "novelty": item.novelty,
+                "risk_tags": list(item.risk_tags),
+                "confidence": item.confidence.value,
+                "collected_at": item.collected_at or datetime.now(timezone.utc).isoformat(),
+                "prompt_version": item.prompt_version,
+                "model": item.model,
+                "input_tokens": item.input_tokens,
+                "output_tokens": item.output_tokens,
+                "estimated_cost_usd": item.estimated_cost_usd,
+            }
+            for item in items
+        ]
+        if not rows:
+            return
+        self._request(
+            "news_items",
+            method="POST",
+            payload=rows,
+            query={"on_conflict": "id"},
+            prefer="resolution=merge-duplicates,return=minimal",
+        )
+
+    def upsert_daily_news_score(self, score: DailyNewsScore) -> None:
+        self._request(
+            "daily_news_scores",
+            method="POST",
+            payload=[
+                {
+                    "symbol": score.symbol,
+                    "date": score.date,
+                    "item_count": score.item_count,
+                    "weighted_score": score.weighted_score,
+                    "positive_count": score.positive_count,
+                    "negative_count": score.negative_count,
+                    "high_impact_count": score.high_impact_count,
+                    "negative_shock_count": score.negative_shock_count,
+                    "top_summaries": list(score.top_summaries),
+                    "risk_tags": list(score.risk_tags),
+                }
+            ],
+            query={"on_conflict": "symbol,date"},
+            prefer="resolution=merge-duplicates,return=minimal",
+        )
+
+    def fetch_daily_news_scores(self, symbol: str, *, limit: int = 10) -> list[DailyNewsScore]:
+        rows = self._request(
+            "daily_news_scores",
+            query={
+                "select": "*",
+                "symbol": f"eq.{symbol}",
+                "order": "date.desc",
+                "limit": str(limit),
+            },
+        )
+        return [
+            DailyNewsScore(
+                symbol=str(row["symbol"]),
+                date=str(row["date"]),
+                item_count=int(row["item_count"]),
+                weighted_score=float(row["weighted_score"]),
+                positive_count=int(row["positive_count"]),
+                negative_count=int(row["negative_count"]),
+                high_impact_count=int(row["high_impact_count"]),
+                negative_shock_count=int(row["negative_shock_count"]),
+                top_summaries=tuple(row.get("top_summaries") or ()),
+                risk_tags=tuple(row.get("risk_tags") or ()),
+            )
+            for row in rows
+        ]
+
+    def _request(
+        self,
+        table: str,
+        *,
+        method: str = "GET",
+        payload: object | None = None,
+        query: dict[str, str] | None = None,
+        prefer: str | None = None,
+    ) -> list[dict[str, object]]:
+        endpoint = f"{self.url}/rest/v1/{table}"
+        if query:
+            endpoint = f"{endpoint}?{urlencode(query)}"
+        headers = {
+            "apikey": self.secret_key,
+            "Accept": "application/json",
+        }
+        if not self.secret_key.startswith("sb_secret_"):
+            headers["Authorization"] = f"Bearer {self.secret_key}"
+        data = None
+        if payload is not None:
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        if prefer:
+            headers["Prefer"] = prefer
+        request = Request(endpoint, data=data, headers=headers, method=method)
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                raw = response.read()
+        except HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Supabase request failed ({error.code}): {detail}") from error
+        except URLError as error:
+            raise RuntimeError(f"Supabase request failed: {error.reason}") from error
+        if not raw:
+            return []
+        decoded = json.loads(raw.decode("utf-8"))
+        if not isinstance(decoded, list):
+            raise RuntimeError("Supabase response must be a JSON array")
+        return decoded
+
+
+def create_repository_from_env() -> NewsRepository:
+    backend = os.getenv("KR_STOCK_DB_BACKEND", "sqlite").strip().lower()
+    if backend == "sqlite":
+        path = os.getenv("KR_STOCK_SQLITE_PATH", "data/kr_stock_news.db")
+        return KrStockRepository(path)
+    if backend == "supabase":
+        return SupabaseRepository.from_env()
+    raise ValueError("KR_STOCK_DB_BACKEND must be sqlite or supabase")

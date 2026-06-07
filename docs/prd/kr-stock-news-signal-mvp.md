@@ -53,7 +53,8 @@
 - watchlist 외 종목은 "watchlist 등록 필요"로 거절한다.
 - OpenAI Responses API web search를 기본 뉴스 검색/요약/점수화 경로로 사용한다.
 - 뉴스 원문 body는 저장하지 않고 source metadata, 짧은 한국어 요약, 점수만 저장한다.
-- SQLite DB를 MVP 기본 저장소로 사용한다.
+- SQLite DB를 로컬/테스트 기본 저장소로 사용한다.
+- 공유 운영 저장소는 Supabase Postgres를 사용하며, backend engine만 쓰기 권한을 가진다.
 - 같은 뉴스는 stable id로 upsert해 중복 저장을 막는다.
 - 저장된 `daily_news_scores`만 사용해 최근 10일 뉴스 feature를 계산한다.
 - 로컬 컴퓨터가 켜져 있는 동안 scheduler가 정해진 주기로 뉴스 수집을 실행할 수 있게 설계한다.
@@ -257,6 +258,10 @@ GET  /api/kr-stocks/news/daily?symbol=005930.KS&date=YYYY-MM-DD
 GET  /api/kr-stocks/news/feature?symbol=005930.KS&lookback_days=10
 ```
 
+API 소비자는 Supabase에 직접 접근하지 않고 이 엔진 API를 경유한다. Supabase
+publishable key는 엔진 쓰기 인증에 사용하지 않으며, ingestion은 backend 전용
+secret으로만 수행한다.
+
 ---
 
 ## 10. 수용 기준
@@ -272,12 +277,16 @@ GET  /api/kr-stocks/news/feature?symbol=005930.KS&lookback_days=10
 - 최근 10일 feature는 저장된 daily score만 사용하고 원문을 LLM에 다시 보내지 않는다.
 - OpenAI API key가 없으면 real provider는 명확히 실패하고 sample provider 테스트는 통과한다.
 - `make test-kr-stock-signal`이 신규 core tests를 실행한다.
+- Supabase migration은 기존 3개 테이블과 stable primary key/upsert 동작을 보존한다.
+- Supabase 테이블은 RLS가 활성화되고 public read/write policy를 만들지 않는다.
+- `KR_STOCK_DB_BACKEND=supabase`일 때 엔진 API가 Supabase 저장 결과를 refresh/query한다.
+- `daily`와 `feature` API는 저장된 score만 반환하고 뉴스 원문을 재분석하지 않는다.
 
 ---
 
 ## 11. 가정·제약
 
 - 실제 뉴스 ingestion에는 `OPENAI_API_KEY`가 필요하다.
-- 로컬 MVP DB는 SQLite로 충분하다. 원격 DB 가입은 아직 필요 없다.
+- SQLite는 로컬/테스트 경로로 유지하고 공유 데이터는 Supabase Free 프로젝트에 저장한다.
 - 뉴스 검색 품질과 비용이 맞지 않으면 Naver Search API 또는 OpenDART API를 후속 adapter로 검토한다.
 - 이 엔진의 점수는 투자 조언이나 자동 주문이 아니다.

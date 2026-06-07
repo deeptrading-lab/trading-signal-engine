@@ -1,7 +1,7 @@
 # QA: kr-stock-news-signal-mvp
 
 - **slug**: `kr-stock-news-signal-mvp`
-- **QA 일자**: 2026-06-06
+- **QA 일자**: 2026-06-07
 - **대상 PRD**: `docs/prd/kr-stock-news-signal-mvp.md`
 - **대상 구현**: `ai/kr_stock_signal/*`, `ai/tests/test_kr_stock_signal.py`
 - **판정**: PASS
@@ -20,10 +20,11 @@ git diff --check
 
 결과:
 
-- `ai/tests/test_kr_stock_signal.py`: 6 passed
-- 전체 `ai/tests/`: 191 passed
+- `ai/tests/test_kr_stock_signal.py`: 10 passed
+- 전체 `ai/tests/`: 195 passed
 - `git diff --check`: pass
 - OpenAI real smoke: 삼성전자(`005930.KS`) 뉴스 1건 수집/요약/점수화/SQLite 저장 성공
+- Supabase real smoke: watchlist seed, sample 2회 idempotent upsert, daily/feature API 조회 성공
 
 ---
 
@@ -43,6 +44,12 @@ git diff --check
 | 최소 local test는 API key 없이 가능 | fake/sample provider 기반 테스트 | PASS |
 | OpenAI payload mapping은 schema validation 가능 | `test_openai_news_payload_mapping_is_schema_validated_by_news_layer` | PASS |
 | OpenAI real provider로 삼성전자 뉴스 수집 가능 | 수동 smoke, `/private/tmp/kr_stock_news_openai_test_final.db` | PASS |
+| Supabase stable id/upsert 요청 | `test_supabase_repository_uses_backend_secret_and_postgrest_upsert` | PASS |
+| publishable key로 backend write 차단 | `test_supabase_repository_maps_daily_scores_and_rejects_publishable_key` | PASS |
+| 신규 secret/legacy service-role 헤더 호환 | Supabase 공식 API key 규칙 + repository 단위 테스트 | PASS |
+| refresh → daily → feature 엔진 API | `test_kr_stock_news_http_api_refresh_daily_and_feature` | PASS |
+| 실제 Supabase sample 2회 upsert | `2026-06-07` row 1건 유지 | PASS |
+| 실제 엔진 API → Supabase 조회 | health/daily/feature 수동 smoke | PASS |
 
 ---
 
@@ -50,7 +57,7 @@ git diff --check
 
 - **뉴스 API key 없음**: `OpenAINewsProvider`는 `OPENAI_API_KEY is not configured`로 실패한다. sample provider 테스트는 API key 없이 가능해야 한다.
 - **DB 중복 저장**: `daily_news_scores`, `news_items` 모두 primary key/upsert 경로를 둔다.
-- **DB lock/동시 writer**: MVP 정책은 local server 단일 writer다. 동시 writer 스트레스 테스트는 후속 PR 필요.
+- **DB 동시 writer**: Supabase 경로는 stable primary key와 PostgREST upsert를 사용한다.
 - **뉴스 schema 불량**: score 범위, risk tag, summary 길이 validation으로 차단한다.
 - **watchlist 외 종목**: ValueError로 명확히 거절한다.
 - **OpenAI 응답 비JSON**: provider가 `NewsProviderError`로 실패해야 하며, 실패 run log 테이블은 후속 구현 대상이다.
@@ -64,12 +71,12 @@ git diff --check
 
 1. 실제 반복 실행을 원하면 `OPENAI_API_KEY`를 `.env.local` 또는 OS secret에 설정.
 2. OpenAI 일일 비용 한도 기본값 `$0.50` 유지 여부 확인.
-3. 원격 DB는 아직 필요 없음. MVP는 SQLite local file로 충분.
-4. 채팅에 노출된 API key는 운영용으로 계속 쓰기보다 새 key로 rotate하는 것을 권장.
+3. 채팅에 노출된 Supabase secret을 rotate하고 새 secret을 `.env.local`에 직접 설정.
+4. publishable key는 엔진 backend write에 사용하지 않는다.
+5. 채팅에 노출된 OpenAI API key는 운영용으로 계속 쓰기보다 새 key로 rotate하는 것을 권장.
 
 후속 구현 후보:
 
-- local HTTP endpoint.
 - scheduler entrypoint.
 - ingestion run log와 비용 한도 enforcement.
 - retention cleanup job.

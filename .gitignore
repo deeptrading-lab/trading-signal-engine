@@ -38,3 +38,6 @@ htmlcov/
 data/*.db
 data/*.sqlite
 data/*.sqlite3
+
+# Supabase CLI local cache
+supabase/.temp/

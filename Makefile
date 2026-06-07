@@ -3,13 +3,14 @@ SYMBOL ?= BTC
 TICKER ?= AAPL
 PORT ?= 8000
 
-.PHONY: help install daemon-coordinator bitcoin-server signal signal-offline kr-news kr-news-sample test test-coordinator test-bitcoin-signal test-kr-stock-signal
+.PHONY: help install daemon-coordinator bitcoin-server kr-news-server signal signal-offline kr-news kr-news-sample test test-coordinator test-bitcoin-signal test-kr-stock-signal
 
 help:
 	@echo "Available targets:"
 	@echo "  install            - Install Python dependencies (ai/requirements.txt)"
 	@echo "  daemon-coordinator - Run Hayoung AI Coordinator bot ($(PYTHON) -m ai.coordinator.main)"
 	@echo "  bitcoin-server     - Run local Bitcoin allocation HTTP server"
+	@echo "  kr-news-server     - Run Korean stock news HTTP API"
 	@echo "  signal SYMBOL=BTC  - Generate a Bitcoin allocation brief via free provider"
 	@echo "  signal-offline SYMBOL=BTC - Generate a brief with deterministic sample prices"
 	@echo "  kr-news SYMBOL=삼성전자 - Collect, summarize, and score Korean stock news via OpenAI"
@@ -31,6 +32,9 @@ daemon-coordinator:
 
 bitcoin-server:
 	$(PYTHON) -m ai.bitcoin_signal.server
+
+kr-news-server:
+	$(PYTHON) -m ai.kr_stock_signal.server
 
 signal:
 	$(PYTHON) -m ai.bitcoin_signal.cli $(SYMBOL)

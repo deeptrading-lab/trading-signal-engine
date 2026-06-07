@@ -6,7 +6,7 @@ from pathlib import Path
 from .ingestion import NewsIngestionService, NewsProvider
 from .models import NewsItem
 from .openai_news import OpenAINewsProvider
-from .repository import KrStockRepository
+from .repository import KrStockRepository, create_repository_from_env
 from .watchlist import require_watchlist_symbol
 
 
@@ -38,7 +38,11 @@ def main() -> int:
     parser.add_argument("--score-date", default=None, help="Score date in YYYY-MM-DD. Defaults to today.")
     args = parser.parse_args()
 
-    repo = KrStockRepository(Path(args.db))
+    repo = (
+        KrStockRepository(Path(args.db))
+        if args.db != "data/kr_stock_news.db"
+        else create_repository_from_env()
+    )
     repo.initialize()
     provider: NewsProvider = OpenAINewsProvider() if args.provider == "openai" else SampleNewsProvider()
     result = NewsIngestionService(repo, provider).ingest_symbol(args.symbol, score_date=args.score_date)

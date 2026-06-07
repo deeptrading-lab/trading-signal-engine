@@ -146,13 +146,22 @@ This feature is advisory only. It should not directly trigger a buy/sell action.
 
 ## 5. DB Storage
 
-SQLite is the MVP storage. Recommended local path:
+SQLite remains the local/offline test storage. Recommended local path:
 
 ```text
 data/kr_stock_news.db
 ```
 
 Do not commit the DB file. Commit only schema/repository code.
+
+The next shared/remote storage target is Supabase Postgres Free tier.
+
+- Keep the existing SQLite repository for tests and offline smoke runs.
+- Add a Supabase repository behind the same repository contract.
+- Use Postgres-native `jsonb`, `timestamptz`, `date`, and boolean types instead of SQLite JSON/text encodings.
+- Apply schema changes as versioned migrations.
+- Backend ingestion credentials must never be exposed to the frontend.
+- Prefer frontend access through this engine's HTTP API. Direct frontend reads require read-only RLS policies.
 
 Tables:
 
@@ -169,6 +178,17 @@ Retention:
 
 - `news_items`: 90 days
 - `daily_news_scores`: 1 year
+
+Supabase migration checklist:
+
+1. Create `watchlist_symbols`, `news_items`, and `daily_news_scores`.
+2. Preserve the existing primary keys and idempotent upsert behavior.
+3. Add indexes for `news_items(symbol, published_at desc)` and
+   `daily_news_scores(symbol, date desc)`.
+4. Enable RLS before allowing frontend credentials.
+5. Deny public writes; ingestion writes are backend-only.
+6. Add a read policy only for the tables/columns the frontend actually needs.
+7. Run sample ingestion twice and verify row counts do not increase from duplicates.
 
 ---
 
@@ -193,7 +213,22 @@ Optional later:
 
 - Naver Search API client id/secret if OpenAI web search is too expensive or noisy.
 - OpenDART API key if 공시 데이터를 official source로 붙일 때.
-- Remote DB account only if local SQLite is no longer enough.
+- Supabase Free project for shared persistence and frontend/backend integration.
+
+Required for the Supabase step:
+
+- Existing/new project decision.
+- Existing project name or project ref. Do not paste database passwords or secret keys into chat.
+- Put runtime secrets in `.env.local`:
+
+```bash
+KR_STOCK_DB_BACKEND=supabase
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SECRET_KEY=<local-only-secret>
+```
+
+- Frontend reads through the engine HTTP API. It does not receive the backend
+  Supabase secret or access Supabase tables directly.
 
 ---
 

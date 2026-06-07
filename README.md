@@ -1,6 +1,6 @@
 # Trading Signal Engine
 
-> **Current planning direction (2026-06-06)**: 신규 우선 PRD는 [docs/prd/kr-stock-news-signal-mvp.md](./docs/prd/kr-stock-news-signal-mvp.md)입니다. 다음 단계는 삼성전자·SK하이닉스·현대차를 watchlist로 두고, 뉴스 수집·요약·점수화 결과를 SQLite에 저장하는 국내 주식 뉴스 엔진입니다. 국내 주식 가격 provider와 매수/매도 수량 계산은 이 엔진 범위가 아니며, 아래 Bitcoin-only 설명은 현재 구현된 기존 엔진 맥락으로 남겨 둡니다.
+> **Current planning direction (2026-06-07)**: 신규 우선 PRD는 [docs/prd/kr-stock-news-signal-mvp.md](./docs/prd/kr-stock-news-signal-mvp.md)입니다. 삼성전자·SK하이닉스·현대차 뉴스 수집·요약·점수화 결과를 로컬 SQLite 또는 Supabase에 저장하고 엔진 HTTP API로 조회합니다. 국내 주식 가격 provider와 매수/매도 수량 계산은 이 엔진 범위가 아니며, 아래 Bitcoin-only 설명은 현재 구현된 기존 엔진 맥락으로 남겨 둡니다.
 
 비트코인 전용 자산 배분 의사결정 엔진입니다.
 
@@ -67,6 +67,24 @@ Bitcoin Allocation Brief
 
 ## API Usage
 
+### Korean Stock News
+
+```bash
+PYTHON=.venv/bin/python make kr-news-server
+```
+
+기본 주소는 `http://127.0.0.1:8766`이다.
+
+```text
+POST /api/kr-stocks/news/refresh
+GET  /api/kr-stocks/news/daily?symbol=005930.KS&date=YYYY-MM-DD
+GET  /api/kr-stocks/news/feature?symbol=005930.KS&lookback_days=10
+```
+
+공유 저장소는 `KR_STOCK_DB_BACKEND=supabase`로 선택하며 `SUPABASE_URL`과
+backend 전용 `SUPABASE_SECRET_KEY`를 `.env.local` 또는 배포 secret manager에
+설정한다. 프론트엔드는 Supabase에 직접 접근하지 않고 이 API를 호출한다.
+
 ### OpenAI
 
 OpenAI는 현재 활성화된 데이터 수집 경로다. 다음 조건이 필요하다.
@@ -99,7 +117,7 @@ Claude는 최종 요약 helper만 일부 준비되어 있고, 백엔드 데이�
 - [x] 모바일 웹 대시보드
 - [x] 로컬 실행 및 검증
 - [ ] 원격 배포
-- [ ] DB 연동
+- [x] Supabase DB 연동
 - [ ] 하루 1회 배치 저장
 - [ ] 전일 뉴스 + 전일 매매 동향 기반 저장 결과 조회
 - [ ] Claude 데이터 수집 경로 구현

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+import threading
 from datetime import date, timedelta
+from http.server import ThreadingHTTPServer
+from urllib.request import Request, urlopen
 
 import pytest
 
@@ -8,7 +12,13 @@ from ai.kr_stock_signal.models import DailyNewsScore, NewsItem
 from ai.kr_stock_signal.news import build_daily_news_score, build_news_feature, validate_news_item
 from ai.kr_stock_signal.ingestion import NewsIngestionService, NewsProvider
 from ai.kr_stock_signal.openai_news import _items_from_payload
-from ai.kr_stock_signal.repository import KrStockRepository, news_item_id
+from ai.kr_stock_signal.repository import (
+    KrStockRepository,
+    SupabaseRepository,
+    create_repository_from_env,
+    news_item_id,
+)
+from ai.kr_stock_signal.server import KrStockNewsHandler
 from ai.kr_stock_signal.watchlist import WATCHLIST, require_watchlist_symbol
 
 
@@ -185,3 +195,139 @@ def test_openai_news_payload_mapping_is_schema_validated_by_news_layer():
     assert items[0].model == "gpt-test"
     assert items[0].input_tokens == 100
     assert items[0].risk_tags == ("earnings",)
+
+
+class FakeHTTPResponse:
+    def __init__(self, payload: object | None = None) -> None:
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self) -> bytes:
+        if self.payload is None:
+            return b""
+        return json.dumps(self.payload).encode("utf-8")
+
+
+def test_supabase_repository_uses_backend_secret_and_postgrest_upsert(monkeypatch):
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        return FakeHTTPResponse()
+
+    monkeypatch.setattr("ai.kr_stock_signal.repository.urlopen", fake_urlopen)
+    repo = SupabaseRepository("https://project.supabase.co", "sb_secret_test")
+    repo.initialize()
+    item = NewsItem(
+        symbol="005930.KS",
+        title="삼성전자 신규 수주",
+        summary_ko="삼성전자 신규 수주가 투자심리에 긍정적으로 작용할 수 있습니다.",
+        sentiment_score=1,
+        impact_score=2,
+        relevance_score=3,
+        published_at="2026-06-06",
+    )
+    repo.upsert_news_items([item])
+    repo.upsert_daily_news_score(build_daily_news_score("005930.KS", "2026-06-06", [item]))
+
+    assert len(requests) == 3
+    news_request = requests[1][0]
+    assert news_request.full_url.endswith("/rest/v1/news_items?on_conflict=id")
+    assert news_request.headers["Apikey"] == "sb_secret_test"
+    assert "Authorization" not in news_request.headers
+    payload = json.loads(news_request.data.decode("utf-8"))
+    assert payload[0]["id"] == news_item_id(item)
+    assert payload[0]["collected_at"]
+
+
+def test_supabase_repository_maps_daily_scores_and_rejects_publishable_key(monkeypatch):
+    rows = [
+        {
+            "symbol": "005930.KS",
+            "date": "2026-06-06",
+            "item_count": 1,
+            "weighted_score": 18,
+            "positive_count": 1,
+            "negative_count": 0,
+            "high_impact_count": 1,
+            "negative_shock_count": 0,
+            "top_summaries": ["핵심 요약"],
+            "risk_tags": ["sector"],
+        }
+    ]
+    monkeypatch.setattr(
+        "ai.kr_stock_signal.repository.urlopen",
+        lambda request, timeout: FakeHTTPResponse(rows),
+    )
+    scores = SupabaseRepository(
+        "https://project.supabase.co",
+        "sb_secret_test",
+    ).fetch_daily_news_scores("005930.KS")
+    assert scores[0].weighted_score == 18
+    assert scores[0].top_summaries == ("핵심 요약",)
+
+    monkeypatch.setenv("KR_STOCK_DB_BACKEND", "supabase")
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_publishable_test")
+    with pytest.raises(ValueError, match="publishable key"):
+        create_repository_from_env()
+
+
+def test_supabase_legacy_service_role_key_uses_bearer_header(monkeypatch):
+    requests = []
+    monkeypatch.setattr(
+        "ai.kr_stock_signal.repository.urlopen",
+        lambda request, timeout: requests.append(request) or FakeHTTPResponse([]),
+    )
+    SupabaseRepository(
+        "https://project.supabase.co",
+        "legacy.jwt.service-role",
+    ).fetch_daily_news_scores("005930.KS")
+    assert requests[0].headers["Authorization"] == "Bearer legacy.jwt.service-role"
+
+
+def test_kr_stock_news_http_api_refresh_daily_and_feature(tmp_path):
+    repo = KrStockRepository(tmp_path / "api.db")
+    repo.initialize()
+    KrStockNewsHandler.repository = repo
+    server = ThreadingHTTPServer(("127.0.0.1", 0), KrStockNewsHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        refresh = Request(
+            f"{base_url}/api/kr-stocks/news/refresh",
+            data=json.dumps(
+                {
+                    "symbol": "삼성전자",
+                    "provider": "sample",
+                    "score_date": "2026-06-06",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(refresh) as response:
+            assert response.status == 201
+
+        with urlopen(
+            f"{base_url}/api/kr-stocks/news/daily?symbol=005930.KS&date=2026-06-06"
+        ) as response:
+            daily = json.loads(response.read().decode("utf-8"))
+        assert daily["scores"][0]["weighted_score"] == 6.0
+
+        with urlopen(
+            f"{base_url}/api/kr-stocks/news/feature?symbol=005930.KS&lookback_days=10"
+        ) as response:
+            feature = json.loads(response.read().decode("utf-8"))
+        assert feature["news_score_10d"] == 6.0
+        assert feature["lookback_days"] == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

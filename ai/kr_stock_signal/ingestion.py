@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from .models import DailyNewsScore, NewsItem
 from .news import build_daily_news_score, today_iso
-from .repository import KrStockRepository, news_item_id
+from .repository import NewsRepository, news_item_id
 from .watchlist import require_watchlist_symbol
 
 
@@ -26,7 +26,7 @@ class IngestionResult:
 
 
 class NewsIngestionService:
-    def __init__(self, repository: KrStockRepository, provider: NewsProvider) -> None:
+    def __init__(self, repository: NewsRepository, provider: NewsProvider) -> None:
         self.repository = repository
         self.provider = provider
 

@@ -1,6 +1,6 @@
 # Trading Signal Engine — Project Status
 
-Last updated: 2026-06-06
+Last updated: 2026-06-07
 
 이 문서는 새 세션이 "지금까지 무엇이 구현됐고, 오늘 무엇을 하면 되는가"를 빠르게 판단하기 위한 상태판이다. 세션 시작의 세부 맥락은 `docs/SESSION_NOTES.md` 최신 항목과 `docs/HANDOFF.md` 최근 항목을 함께 확인한다.
 
@@ -25,6 +25,9 @@ Last updated: 2026-06-06
   - OpenAI Responses API web search provider 경계 추가. 실제 실행은 `OPENAI_API_KEY` 필요.
   - sample provider 기반 CLI smoke path.
   - CLI: `python -m ai.kr_stock_signal.cli 삼성전자 --provider sample`.
+  - SQLite/Supabase repository 선택: `KR_STOCK_DB_BACKEND`.
+  - Supabase Postgres migration과 backend-only RLS 기본 정책.
+  - Korean news HTTP API: refresh, daily, feature.
 
 - **Bitcoin analysis engine**
   - `ai.bitcoin_signal.engine.analyze_bitcoin` 진입점.
@@ -47,6 +50,7 @@ Last updated: 2026-06-06
 ```bash
 PYTHON=.venv/bin/python make kr-news-sample SYMBOL=삼성전자
 PYTHON=.venv/bin/python make kr-news SYMBOL=삼성전자
+PYTHON=.venv/bin/python make kr-news-server
 PYTHON=.venv/bin/python make test-kr-stock-signal
 make signal-offline SYMBOL=BTC
 make signal SYMBOL=BTC
@@ -57,39 +61,52 @@ make test
 
 ## Known Gaps
 
-- 실제 OpenAI 뉴스 ingestion smoke test 결과를 문서에 반영해야 한다.
-- local HTTP API가 아직 없다.
+- 실제 OpenAI 삼성전자 뉴스 ingestion smoke는 완료했다.
+- Supabase migration 적용과 sample ingestion/API smoke가 완료됐다.
+- 운영용 backend secret을 로컬/배포 환경에 안전하게 설정하고 채팅에 노출된 검증용 secret을 회전해야 한다.
 - scheduler entrypoint가 아직 없다.
-- 저장된 뉴스 점수를 프론트엔드가 조회할 API contract가 아직 없다.
+- 프론트엔드는 엔진 API 경유로 확정됐으며 실제 frontend 연동 smoke가 남았다.
 - 비용 한도 enforcement와 ingestion run log가 아직 없다.
 - retention cleanup job이 아직 없다.
 - Codex CLI adapter는 가능성 검토만 되었고 구현하지 않는다. MVP 기본 경로는 Python scheduler + OpenAI API 직접 호출이다.
 
 ## Today / Next TODO
 
-1. **실제 OpenAI 삼성전자 뉴스 수집 테스트**
-   - 사용자가 제공한 key는 파일에 저장하지 않고 일회성 환경 변수로만 사용한다.
-   - 성공하면 `news_items`, `daily_news_scores` 저장과 CLI 출력 확인.
+1. **Supabase 운영 secret 정리**
+   - migration, sample upsert, daily/feature API smoke는 완료됐다.
+   - 채팅에 노출된 기존 secret을 Supabase Dashboard에서 rotate한다.
+   - 새 `SUPABASE_SECRET_KEY`는 `.env.local` 또는 배포 secret manager에만 설정한다.
 
-2. **local HTTP API 구현**
-   - `POST /api/kr-stocks/news/refresh`
-   - `GET /api/kr-stocks/news/daily`
-   - `GET /api/kr-stocks/news/feature`
-
-3. **scheduler 구현**
+2. **scheduler 구현**
    - 08:30/12:30/16:10 `Asia/Seoul` 기준.
-   - local single-writer 정책으로 DB lock 위험을 줄인다.
+   - Supabase 사용 시 중복 실행에도 같은 결과가 되도록 upsert/실행 lock 정책을 둔다.
 
-4. **비용/실행 로그**
+3. **비용/실행 로그**
    - `ingestion_runs` 테이블 추가 검토.
    - 모델, token usage, estimated cost, status, error message 저장.
 
-5. **프론트엔드 연동 contract 확정**
+4. **프론트엔드 연동**
    - 가격 데이터는 프론트엔드가 제공한다.
    - 이 엔진은 symbol/date/lookback 기준 뉴스 점수와 요약만 반환한다.
+   - frontend는 Supabase 직접 접근 없이 이 엔진의 HTTP API만 호출한다.
 
-6. **문서/README 최종 정리**
+5. **문서/README 최종 정리**
    - Bitcoin-only 문구는 기존 구현 설명으로 남기되 신규 방향과 혼동되지 않게 한다.
+
+## Supabase Setup Needed From User
+
+Codex가 연결 작업을 시작할 때 필요한 정보:
+
+1. 기존 Supabase 프로젝트를 쓸지, 새 Free 프로젝트를 만들지 결정.
+2. 기존 프로젝트라면 project name 또는 project ref만 전달. 비밀키는 채팅에 붙이지 않는다.
+3. 새 프로젝트라면 Supabase Dashboard에서 organization과 region을 선택해 프로젝트 생성.
+4. 앱 실행용 값은 로컬 `.env.local`에 직접 설정:
+   - `SUPABASE_URL`
+   - `SUPABASE_SECRET_KEY` 또는 legacy service-role key
+5. frontend 조회 방식은 `frontend → 이 엔진 HTTP API → Supabase`로 확정.
+
+Supabase MCP가 현재 Codex 세션에 연결되어 있으면 migration과 schema 확인은 MCP로 수행한다.
+Supabase MCP/CLI 로그인 없이 Dashboard SQL Editor와 backend REST secret으로 연결 검증을 완료했다.
 
 ## Answering "What Should I Do Today?"
 

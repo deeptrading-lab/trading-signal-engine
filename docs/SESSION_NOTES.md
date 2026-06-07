@@ -402,3 +402,63 @@ A·F·B 모든 즉시 가능 트랙 종결. 다음 세션은 P2 누적 follow-up
 - 채팅에 노출된 OpenAI key는 운영용으로 계속 쓰기보다 새 key로 rotate 권장.
 - 반복 실행을 원하면 새 key를 `.env.local` 또는 OS secret에 설정.
 - OpenAI 일일 비용 한도 `$0.50` 기본값 유지 여부 결정.
+
+---
+
+## 2026-06-07 — Supabase 원격 저장 TODO와 사용자 준비사항 확정
+
+**요약**: 사용자가 현재 뉴스 수집 데이터를 Supabase 또는 무료 원격 DB에 저장하고 싶다고 요청했다. 다음 우선 작업을 Supabase Free 기반 공유 저장소 연결로 올리고, SQLite는 로컬 테스트/오프라인 실행용으로 유지하기로 정리했다.
+
+### 결정·정리
+
+- 원격 DB 1순위는 Supabase Postgres Free tier.
+- 기존 `watchlist_symbols`, `news_items`, `daily_news_scores`를 versioned migration으로 생성한다.
+- SQLite와 Supabase가 같은 저장 동작을 제공하도록 repository 경계를 먼저 분리한다.
+- backend ingestion write credential과 frontend read credential을 분리한다.
+- frontend는 엔진 HTTP API를 통해 읽는 방식을 우선 권장하며, 직접 Supabase를 읽을 때만 read-only RLS를 연다.
+- secret/password/service-role key는 채팅이나 저장소에 전달하지 않는다. `.env.local` 또는 배포 secret manager에만 둔다.
+
+### 현재 MCP 상태
+
+- Codex 도구 검색에서 Supabase DB MCP 명령이 현재 세션에 노출되지 않았다.
+- MCP가 활성화된 세션으로 재연결되면 project 목록/schema 확인/migration 적용을 MCP로 진행한다.
+
+### 사용자에게 필요한 입력
+
+1. 기존 Supabase 프로젝트 사용 또는 새 Free 프로젝트 생성 여부.
+2. 기존 프로젝트라면 project name/ref만 전달.
+3. frontend 조회 방식: 엔진 HTTP API 경유(권장) 또는 Supabase 직접 read-only RLS.
+4. runtime secret은 사용자가 로컬 `.env.local`에 설정하고 실제 값은 채팅에 붙이지 않는다.
+
+### 구현 진행
+
+- 사용자가 frontend는 엔진 API를 경유한다고 확정했다.
+- Supabase PostgREST repository와 `KR_STOCK_DB_BACKEND` 선택 경로를 구현했다.
+- backend 전용 `SUPABASE_SECRET_KEY`만 쓰기에 허용하고 `sb_publishable_` key는 명시적으로 거절한다.
+- RLS를 활성화하고 public policy를 만들지 않는 Supabase migration을 추가했다.
+- `refresh`, `daily`, `feature` local HTTP API를 구현했다.
+- 실제 프로젝트 적용은 project ref/URL 확인과 backend secret의 로컬 설정 후 진행한다.
+
+### 실제 Supabase 연결 확인
+
+- project URL `https://hietjgsgvqqmvdymitxn.supabase.co`의 REST 인증 성공.
+- `daily_news_scores` 조회 시 `PGRST205` 확인: 인증 문제가 아니라 migration 미적용으로 테이블이 아직 없음.
+- Supabase secret key는 DDL 실행 권한이 아니므로 migration 적용에는 Dashboard SQL Editor 또는 DB password/CLI link가 필요하다.
+- 인앱 브라우저의 Supabase 사이트 사용 제한으로 Dashboard SQL Editor 자동 조작은 진행하지 않았다.
+- 다음 액션: 사용자가 SQL Editor에서 `supabase/migrations/202606070001_kr_stock_news.sql`을 실행한 뒤 알려주면 sample upsert/query smoke를 즉시 진행한다.
+- 채팅에 노출된 backend secret은 연결 완료 후 rotate한다.
+
+### Supabase smoke 완료
+
+- 사용자가 migration SQL 실행 완료.
+- `watchlist_symbols` seed 성공.
+- 삼성전자 sample ingestion을 같은 날짜로 2회 실행:
+  - 두 실행 모두 item 1건 처리.
+  - `daily_news_scores`의 해당 날짜 row는 1건만 유지되어 upsert 멱등성 확인.
+  - weighted score `6.0`, risk tag `sector`.
+- 실제 Supabase backend로 엔진 서버를 실행해 아래 응답 확인:
+  - `/health` 정상.
+  - `/api/kr-stocks/news/daily` 정상.
+  - `/api/kr-stocks/news/feature` 정상, `news_score_10d=6.0`.
+- 검증용 서버 종료 완료.
+- 남은 사용자 작업은 채팅에 노출된 secret rotate와 새 secret의 `.env.local`/배포 secret 설정.
