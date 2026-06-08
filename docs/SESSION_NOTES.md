@@ -471,3 +471,20 @@ A·F·B 모든 즉시 가능 트랙 종결. 다음 세션은 P2 누적 follow-up
 - 허용 목록 밖 risk tag는 조용히 제거하지 않고 provider 오류로 거절한다.
 - URL/발행일이 없는 기사는 수집일을 stable ID에 포함한다.
 - 관련 회귀 테스트 4건을 추가했고 국내 주식 모듈 14건이 통과했다.
+
+---
+
+## 2026-06-08 — README를 국내 주식 뉴스 엔진 중심으로 전면 개편
+
+**요약**: README가 대부분 Bitcoin allocation engine 설명으로 남아 있어 현재 제품
+방향과 맞지 않았다. 국내 주식 뉴스 수집·요약·점수화·저장·조회 엔진을 첫 화면의
+주요 제품으로 설명하도록 전체 구조를 다시 작성했다.
+
+### 반영 내용
+
+- watchlist, 책임 범위, 뉴스 점수의 보조 feature 성격 명시.
+- OpenAI 뉴스 수집, validation, dedupe, daily/10-day feature 흐름 설명.
+- SQLite와 Supabase 설정, migration, RLS, secret 관리 절차 추가.
+- refresh/daily/feature API 요청 예시와 Bearer 인증 설명.
+- 환경변수 표, 프로젝트 구조, 완료 기능과 다음 작업 정리.
+- Bitcoin allocation engine은 `기존 호환 기능` 섹션으로 축소.

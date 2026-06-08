@@ -1,146 +1,294 @@
 # Trading Signal Engine
 
-> **Current planning direction (2026-06-07)**: 신규 우선 PRD는 [docs/prd/kr-stock-news-signal-mvp.md](./docs/prd/kr-stock-news-signal-mvp.md)입니다. 삼성전자·SK하이닉스·현대차 뉴스 수집·요약·점수화 결과를 로컬 SQLite 또는 Supabase에 저장하고 엔진 HTTP API로 조회합니다. 국내 주식 가격 provider와 매수/매도 수량 계산은 이 엔진 범위가 아니며, 아래 Bitcoin-only 설명은 현재 구현된 기존 엔진 맥락으로 남겨 둡니다.
+국내 대형주 뉴스를 수집하고 한국어로 요약·점수화한 뒤 SQLite 또는
+Supabase에 저장하는 백엔드 엔진입니다.
 
-비트코인 전용 자산 배분 의사결정 엔진입니다.
+현재 watchlist는 다음 3개 종목입니다.
 
-MVP는 BTC 일봉 가격, 장기/중기/단기 기술 지표, 변동성, 거래 참여 proxy, 최신 뉴스, Binance 거래소 매매 동향을 조합해 `Bitcoin Allocation Brief`를 생성합니다. 자동 주문은 하지 않으며, 사용자가 현재 보유 현금과 BTC 보유량에 맞춰 비중 확대/유지/축소 여부를 판단하도록 돕는 분석 레이어입니다.
+| 종목 | Symbol | 시장 |
+|---|---|---|
+| 삼성전자 | `005930.KS` | KOSPI |
+| SK하이닉스 | `000660.KS` | KOSPI |
+| 현대차 | `005380.KS` | KOSPI |
 
-## Goals
+이 엔진은 가격 데이터, 기술 지표, 매수·매도 신호, 추천 가격이나 수량을
+만들지 않습니다. 국내 주식 가격은 별도 프론트엔드에서 처리하며, 이 저장소는
+뉴스를 투자 판단의 보조 feature로 정규화하는 역할에 집중합니다.
 
-- Bitcoin-only 분석 경로 제공
-- `INCREASE_ALLOCATION`, `CONDITIONAL_INCREASE`, `MAINTAIN_ALLOCATION`, `REDUCE_ALLOCATION`, `RISK_OFF` 액션 산출
-- 20/50/200일 이동평균, 20/60일 수익률, RSI, 실현 변동성, 최근 고점 대비 낙폭 기반 점수화
-- OpenAI web search 뉴스 요약과 Binance 공개 API 매매 동향을 결합
-- 뉴스/수급 데이터가 없을 때도 명확한 data quality와 보수적 confidence 적용
-- Slack/CLI/외부 소비자가 같은 분석 결과를 조회하도록 백엔드 API 유지
+기준 문서:
 
-## Quick Start
+- [프로젝트 상태](./docs/PROJECT_STATUS.md)
+- [국내 주식 뉴스 MVP PRD](./docs/prd/kr-stock-news-signal-mvp.md)
+- [Data/News 설계](./docs/data/kr-stock-news-signal-mvp.md)
+- [QA 결과](./docs/qa/kr-stock-news-signal-mvp.md)
 
-```bash
-make signal-offline SYMBOL=BTC
-make test-bitcoin-signal
-```
+## 주요 기능
 
-네트워크가 가능하면 무료 BTC-USD chart provider를 사용한다.
+- OpenAI Responses API의 web search를 이용한 종목별 뉴스 수집
+- 기사별 한국어 요약과 점수 산출
+  - `sentiment_score`: `-3..3`
+  - `impact_score`: `0..3`
+  - `relevance_score`: `0..3`
+- novelty, confidence, risk tag 검증
+- URL·제목·날짜 기반 중복 제거와 idempotent upsert
+- 일별 뉴스 점수와 최근 10일 decay feature 집계
+- SQLite 로컬 저장과 Supabase 공유 저장 지원
+- refresh, daily score, feature 조회 HTTP API
+- refresh API Bearer 인증과 OpenAI 비용 한도 가드
 
-```bash
-make signal SYMBOL=BTC
-```
+뉴스 점수는 매수·매도 결론이 아니라 가격 화면이나 후속 분석 엔진이 참고하는
+보조 정보입니다.
 
-로컬 웹 대시보드는 이 저장소 범위가 아니며, 별도 `trading-signal-frontend` 저장소에서 실행한다.
-
-```bash
-cd ../trading-signal-frontend
-npm run dev
-```
-
-엔진은 기본적으로 `http://127.0.0.1:8765/api/bitcoin/brief` 를 사용한다.
-
-## Architecture
+## 처리 흐름
 
 ```text
-User request / Slack / CLI / external client
-↓
-AI Analysis Service (Python)
-- Bitcoin price provider
-- Technical indicator engine
-- Risk and allocation scoring
-- OpenAI web search news snapshot
-- Binance public market-flow snapshot
-↓
-Bitcoin Allocation Brief
-- Action
-- Confidence
-- Score
-- Allocation condition
-- Risk-off condition
-- Reasons / Risks
+OpenAI web search
+        ↓
+뉴스 metadata + 한국어 요약 + structured score
+        ↓
+schema validation / dedupe / stable ID
+        ↓
+SQLite 또는 Supabase
+        ↓
+daily score / recent 10-day feature
+        ↓
+HTTP API
+        ↓
+trading-signal-frontend
 ```
 
-## Core Philosophy
+저장하는 데이터:
 
-- LLM은 계산하지 않는다. 계산과 가드는 Python 코드가 담당한다.
-- 브리핑은 투자 조언이나 자동 주문이 아니라 의사결정 보조 산출물이다.
-- 데이터가 부족하면 결과를 과감하게 보수화한다.
-- 비트코인 외 자산 분석은 MVP 범위가 아니다.
+- 기사 title, source, URL, published time
+- 짧은 한국어 요약
+- sentiment, impact, relevance 점수
+- novelty, confidence, risk tags
+- model, token usage, estimated cost metadata
+- 종목별 일별 집계와 최근 핵심 요약
 
-## API Usage
+뉴스 원문 body는 저장하지 않습니다.
 
-### Korean Stock News
+## 빠른 시작
+
+Python 3.11 이상을 권장합니다.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+make install
+cp .env.example .env.local
+```
+
+API key 없이 sample 데이터로 실행:
+
+```bash
+PYTHON=.venv/bin/python make kr-news-sample SYMBOL=삼성전자
+```
+
+국내 주식 뉴스 테스트:
+
+```bash
+PYTHON=.venv/bin/python make test-kr-stock-signal
+```
+
+전체 테스트:
+
+```bash
+PYTHON=.venv/bin/python make test
+```
+
+## OpenAI 설정
+
+실제 뉴스 수집에는 `.env.local`에 `OPENAI_API_KEY`가 필요합니다.
+
+```bash
+OPENAI_API_KEY=sk-proj-...
+OPENAI_NEWS_MODEL=gpt-5.4-nano
+OPENAI_DAILY_COST_LIMIT_USD=0.50
+OPENAI_NEWS_MAX_REQUEST_COST_USD=0.10
+```
+
+실행:
+
+```bash
+PYTHON=.venv/bin/python make kr-news SYMBOL=삼성전자
+```
+
+비용 가드는 OpenAI 호출 전에 요청별 최대 예상 비용을 일일 한도에서
+예약합니다. 프로세스 재시작을 넘어서는 비용·실행 이력 저장은 후속 작업입니다.
+
+## 저장소 설정
+
+### SQLite
+
+기본값이며 가입이나 외부 서비스가 필요 없습니다.
+
+```bash
+KR_STOCK_DB_BACKEND=sqlite
+KR_STOCK_SQLITE_PATH=data/kr_stock_news.db
+```
+
+SQLite 파일은 로컬 테스트와 오프라인 실행에 사용하며 Git에 커밋하지 않습니다.
+
+### Supabase
+
+공유 데이터와 프론트엔드 연동을 위한 운영 저장소입니다.
+
+먼저 아래 migration을 Supabase에 적용합니다.
+
+```text
+supabase/migrations/202606070001_kr_stock_news.sql
+```
+
+이후 `.env.local`에 backend 전용 값을 설정합니다.
+
+```bash
+KR_STOCK_DB_BACKEND=supabase
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SECRET_KEY=sb_secret_...
+```
+
+보안 원칙:
+
+- `SUPABASE_SECRET_KEY`는 프론트엔드에 전달하지 않습니다.
+- publishable key는 backend 쓰기 인증으로 사용하지 않습니다.
+- Supabase 테이블은 RLS가 활성화되어 있으며 public policy를 만들지 않습니다.
+- 프론트엔드는 Supabase를 직접 읽지 않고 이 엔진의 HTTP API를 호출합니다.
+- secret은 `.env.local` 또는 배포 secret manager에만 저장합니다.
+
+## HTTP API
+
+서버 실행:
 
 ```bash
 PYTHON=.venv/bin/python make kr-news-server
 ```
 
-기본 주소는 `http://127.0.0.1:8766`이다.
+기본 주소는 `http://127.0.0.1:8766`입니다.
 
-```text
-POST /api/kr-stocks/news/refresh
-GET  /api/kr-stocks/news/daily?symbol=005930.KS&date=YYYY-MM-DD
-GET  /api/kr-stocks/news/feature?symbol=005930.KS&lookback_days=10
+### Health
+
+```http
+GET /health
 ```
 
-공유 저장소는 `KR_STOCK_DB_BACKEND=supabase`로 선택하며 `SUPABASE_URL`과
-backend 전용 `SUPABASE_SECRET_KEY`를 `.env.local` 또는 배포 secret manager에
-설정한다. 프론트엔드는 Supabase에 직접 접근하지 않고 이 API를 호출한다.
-refresh 요청은 `KR_STOCK_REFRESH_TOKEN`을 Bearer token으로 전달해야 하며,
-`OPENAI_DAILY_COST_LIMIT_USD`와 `OPENAI_NEWS_MAX_REQUEST_COST_USD`로 비용을 제한한다.
+### 뉴스 수집
 
-### OpenAI
+```http
+POST /api/kr-stocks/news/refresh
+Authorization: Bearer <KR_STOCK_REFRESH_TOKEN>
+Content-Type: application/json
 
-OpenAI는 현재 활성화된 데이터 수집 경로다. 다음 조건이 필요하다.
+{
+  "symbol": "삼성전자",
+  "provider": "openai",
+  "score_date": "2026-06-08"
+}
+```
 
-- `OPENAI_API_KEY` 를 `trading-signal-engine/.env.local` 에 설정
-- `data_provider=openai` 로 요청
-- OpenAI Responses API의 web search tool이 최신 BTC 뉴스 검색에 사용됨
-- Binance 공개 API가 매매 동향 계산에 사용됨
+`.env.local` 설정:
 
-API 요청에서 `data_provider=openai`를 선택하면 이 경로를 사용한다. 키가 없으면 뉴스 수집은 비활성화된다.
+```bash
+KR_STOCK_REFRESH_TOKEN=<충분히 긴 임의 문자열>
+```
 
-### Claude
+인증이 없거나 token이 다르면 `401`을 반환합니다. 로컬 sample 확인에는
+`provider`를 `sample`로 지정할 수 있습니다.
 
-Claude는 최종 요약 helper만 일부 준비되어 있고, 백엔드 데이터 수집 provider는 아직 미구현이다.
+### 일별 점수 조회
 
-- `ANTHROPIC_API_KEY` 는 아직 분석 경로에 연결되지 않았다.
-- `Claude` 토글은 준비 상태 표시만 한다.
-- Claude 경로를 실제로 쓰려면 별도 provider 구현이 필요하다.
+```http
+GET /api/kr-stocks/news/daily?symbol=005930.KS&date=2026-06-08
+```
 
-## Agent Workflow
+응답에는 item count, weighted score, positive/negative count, high impact count,
+negative shock count, 핵심 요약과 risk tag가 포함됩니다.
 
-요구사항부터 구현, QA, 리뷰, 운영까지의 절차는 [AGENTS.md](./AGENTS.md)를 따른다. 신규 우선 제품 PRD는 [docs/prd/kr-stock-news-signal-mvp.md](./docs/prd/kr-stock-news-signal-mvp.md)이며, 기존 Bitcoin-only 구현 맥락은 [docs/prd/bitcoin-allocation-mvp.md](./docs/prd/bitcoin-allocation-mvp.md)를 참고한다.
+### 최근 뉴스 feature 조회
 
-## Current Status
+```http
+GET /api/kr-stocks/news/feature?symbol=005930.KS&lookback_days=10
+```
 
-- [x] 비트코인 전용 분석 경로
-- [x] 기술 지표 기반 배분 액션
-- [x] OpenAI web search 뉴스 수집
-- [x] Binance 공개 API 매매 동향 수집
-- [x] 모바일 웹 대시보드
-- [x] 로컬 실행 및 검증
-- [ ] 원격 배포
-- [x] Supabase DB 연동
-- [ ] 하루 1회 배치 저장
-- [ ] 전일 뉴스 + 전일 매매 동향 기반 저장 결과 조회
-- [ ] Claude 데이터 수집 경로 구현
+저장된 일별 점수에 decay를 적용한 `news_score_10d`, 충격 뉴스 수, 고영향 뉴스 수,
+최근 핵심 요약과 risk tag를 반환합니다. 원문을 LLM에 다시 보내지 않습니다.
 
-## Next Phase
+## 환경변수
 
-다음 단계는 분석을 매 요청마다 다시 계산하는 대신, 하루 한 번 전일 뉴스와 매매 동향을 저장하고 이를 조회하는 구조로 옮기는 것이다.
+| 변수 | 기본값 | 용도 |
+|---|---|---|
+| `OPENAI_API_KEY` | 없음 | 실제 뉴스 수집 |
+| `OPENAI_NEWS_MODEL` | provider 기본값 | 뉴스 검색·요약 모델 |
+| `OPENAI_DAILY_COST_LIMIT_USD` | `0.50` | 프로세스 일일 비용 한도 |
+| `OPENAI_NEWS_MAX_REQUEST_COST_USD` | `0.10` | 요청별 비용 예약값 |
+| `KR_STOCK_DB_BACKEND` | `sqlite` | `sqlite` 또는 `supabase` |
+| `KR_STOCK_SQLITE_PATH` | `data/kr_stock_news.db` | SQLite 파일 경로 |
+| `SUPABASE_URL` | 없음 | Supabase project URL |
+| `SUPABASE_SECRET_KEY` | 없음 | backend 전용 Supabase key |
+| `KR_STOCK_REFRESH_TOKEN` | 없음 | refresh API Bearer token |
+| `KR_STOCK_PORT` | `8766` | HTTP API port |
+| `HOST` | `127.0.0.1` | HTTP bind host |
+| `FRONTEND_ORIGIN` | `http://localhost:3000` | 허용 CORS origin |
 
-목표:
+전체 템플릿은 [.env.example](./.env.example)을 참고하세요.
 
-- 원격 배포 환경에서 스케줄러가 하루 1회 실행
-- 전일 뉴스 스냅샷, 전일 Binance 매매 동향, 엔진 의견을 DB에 저장
-- 사용자가 API/CLI로 요청하면 최신 저장 결과를 조회
-- 필요할 때만 재계산하고, 기본 경로는 저장된 결과 재사용
+## 프로젝트 구조
 
-체크리스트:
+```text
+ai/kr_stock_signal/
+├── cli.py             # 뉴스 수집 CLI와 sample provider
+├── ingestion.py       # validation, dedupe, 저장 orchestration
+├── models.py          # NewsItem, DailyNewsScore, NewsFeature
+├── news.py            # 점수 validation과 집계
+├── openai_news.py     # OpenAI web search provider와 비용 가드
+├── repository.py      # SQLite/Supabase repository
+├── server.py          # refresh/daily/feature HTTP API
+└── watchlist.py       # 삼성전자, SK하이닉스, 현대차
 
-- [ ] DB 스키마 설계
-- [ ] 뉴스 스냅샷 저장 테이블
-- [ ] 일별 의견 저장 테이블
-- [ ] 1일 1회 배치 잡
-- [ ] 조회 API를 저장 결과 우선으로 변경
-- [ ] 원격 배포 구성
-- [ ] Claude provider 구현 여부 재검토
+supabase/migrations/
+└── 202606070001_kr_stock_news.sql
+```
+
+## 현재 상태
+
+완료:
+
+- 국내 대형주 3종 watchlist
+- OpenAI 뉴스 수집·요약·점수화
+- 저장 전 schema validation과 중복 제거
+- SQLite와 Supabase 저장
+- Supabase migration, RLS, idempotent upsert
+- daily score와 최근 10일 feature
+- refresh/daily/feature HTTP API
+- refresh 인증과 OpenAI 비용 사전 가드
+- 실제 OpenAI 및 Supabase smoke test
+
+다음 작업:
+
+1. `08:30`, `12:30`, `16:10` `Asia/Seoul` scheduler
+2. `ingestion_runs`와 token/cost/error 실행 로그
+3. frontend API 연동 smoke
+4. retention cleanup과 source 신뢰도 개선
+5. 원격 배포 구성
+
+최신 우선순위는 [docs/PROJECT_STATUS.md](./docs/PROJECT_STATUS.md)를 기준으로 합니다.
+
+## 기존 호환 기능
+
+기존 Bitcoin allocation engine은 `ai/bitcoin_signal`에 유지되어 있습니다. 현재 제품
+우선순위에서는 superseded 상태이며 신규 국내 주식 뉴스 엔진과 별도 경로입니다.
+
+```bash
+make signal-offline SYMBOL=BTC
+make signal SYMBOL=BTC
+make bitcoin-server
+make test-bitcoin-signal
+```
+
+기존 Bitcoin 설계는
+[docs/prd/bitcoin-allocation-mvp.md](./docs/prd/bitcoin-allocation-mvp.md)를 참고하세요.
+
+## 개발 절차
+
+요구사항, PRD, Data/News 설계, 구현, QA, 리뷰, 배포 절차는
+[AGENTS.md](./AGENTS.md)를 따릅니다.

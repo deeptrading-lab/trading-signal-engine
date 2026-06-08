@@ -1,6 +1,6 @@
 # Trading Signal Engine — Project Status
 
-Last updated: 2026-06-07
+Last updated: 2026-06-08
 
 이 문서는 새 세션이 "지금까지 무엇이 구현됐고, 오늘 무엇을 하면 되는가"를 빠르게 판단하기 위한 상태판이다. 세션 시작의 세부 맥락은 `docs/SESSION_NOTES.md` 최신 항목과 `docs/HANDOFF.md` 최근 항목을 함께 확인한다.
 
@@ -90,8 +90,9 @@ make test
    - 이 엔진은 symbol/date/lookback 기준 뉴스 점수와 요약만 반환한다.
    - frontend는 Supabase 직접 접근 없이 이 엔진의 HTTP API만 호출한다.
 
-5. **문서/README 최종 정리**
-   - Bitcoin-only 문구는 기존 구현 설명으로 남기되 신규 방향과 혼동되지 않게 한다.
+5. **README 전면 정리 완료**
+   - 국내 주식 뉴스 엔진을 본문 중심으로 재구성했다.
+   - Bitcoin engine은 기존 호환 기능 섹션으로 축소했다.
 
 ## Supabase Setup Needed From User
 
