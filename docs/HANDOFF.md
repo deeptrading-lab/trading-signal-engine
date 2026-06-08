@@ -881,3 +881,46 @@
   2. scheduler: 08:30/12:30/16:10 `Asia/Seoul` 뉴스 refresh.
   3. ingestion run log와 비용 한도 enforcement.
   4. source 신뢰도/ranking, 중복 기사 grouping, retention cleanup.
+
+### 2026-06-08 — 국내 주식 뉴스 엔진과 Supabase 저장 API 추가 (#62)
+
+- **slug**: `codex/kr-stock-news-engine` · **author**: @devbob0701
+- **PR**: https://github.com/deeptrading-lab/trading-signal-engine/pull/62
+- **요약**: 국내 주식 뉴스 엔진과 Supabase 저장 API 추가
+- **현재 상태**: QA 통과 · 리뷰·머지 대기 (이 항목은 QA 통과 시점에 자동 기록됨)
+- **PR 본문 발췌**:
+  > ## 배경
+  > 국내 대형주 뉴스 수집·요약·점수화 결과를 공유 저장소에 보관하고 프론트엔드가 엔진 API를 통해 조회할 수 있도록 구현합니다.
+  > 
+  > ## 변경 사항
+  > - 삼성전자·SK하이닉스·현대차 뉴스 전용 엔진과 OpenAI provider
+  > - SQLite/Supabase repository 및 Postgres migration
+  > - refresh/daily/feature HTTP API
+  > - Supabase backend secret 분리와 RLS 기본 정책
+  > - refresh Bearer 인증과 OpenAI 일일 비용 사전 가드
+  > - 저장 전 schema validation, stable ID, 중복 upsert
+  > - 프로젝트 상태·PRD·Data/News·QA 문서 정리
+  > 
+  > ## QA
+  > - `.venv/bin/python -m pytest ai/tests/ -q` → 199 passed
+  > - `git diff --check` → pass
+  > - OpenAI 삼성전자 real smoke → SQLite 저장 성공
+  > - Supabase sample 2회 upsert → 동일 날짜 row 1건 유지
+  > - Supabase backend 엔진 API health/daily/feature smoke → pass
+  > 
+  > ## 1차 리뷰 반영
+  > - invalid item 저장 전 validation
+  > - refresh write token 인증
+  > - OpenAI 일일 비용 호출 전 차단
+  > - unknown risk tag reject
+  > - URL 없는 기사 수집일 기반 stable ID
+  > 
+  > ## 다음 작업
+  > 1. 08:30/12:30/16:10 Asia/Seoul scheduler 구현
+  > 2. ingestion_runs와 비용/실패 로그 저장
+  > 3. 프론트엔드 API 연동 smoke
+- **다음 작업 후보** (PR 본문 기반, 절대적 지시 아님):
+  1. 08:30/12:30/16:10 Asia/Seoul scheduler 구현
+  2. ingestion_runs와 비용/실패 로그 저장
+  3. 프론트엔드 API 연동 smoke
+  4. 채팅에 노출된 Supabase secret rotate 및 배포 secret 설정
