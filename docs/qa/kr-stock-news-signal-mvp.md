@@ -20,8 +20,8 @@ git diff --check
 
 결과:
 
-- `ai/tests/test_kr_stock_signal.py`: 10 passed
-- 전체 `ai/tests/`: 195 passed
+- `ai/tests/test_kr_stock_signal.py`: 14 passed
+- 전체 `ai/tests/`: 199 passed
 - `git diff --check`: pass
 - OpenAI real smoke: 삼성전자(`005930.KS`) 뉴스 1건 수집/요약/점수화/SQLite 저장 성공
 - Supabase real smoke: watchlist seed, sample 2회 idempotent upsert, daily/feature API 조회 성공
@@ -50,6 +50,10 @@ git diff --check
 | refresh → daily → feature 엔진 API | `test_kr_stock_news_http_api_refresh_daily_and_feature` | PASS |
 | 실제 Supabase sample 2회 upsert | `2026-06-07` row 1건 유지 | PASS |
 | 실제 엔진 API → Supabase 조회 | health/daily/feature 수동 smoke | PASS |
+| invalid provider 출력 저장 전 차단 | `test_invalid_provider_item_is_rejected_before_repository_write` | PASS |
+| refresh API Bearer 인증 | `test_refresh_api_rejects_missing_write_token` | PASS |
+| URL 없는 기사 날짜별 stable ID | `test_url_less_news_item_id_uses_collection_date` | PASS |
+| OpenAI 일일 비용 호출 전 차단 | `test_openai_provider_enforces_daily_cost_limit_before_call` | PASS |
 
 ---
 
@@ -62,6 +66,8 @@ git diff --check
 - **watchlist 외 종목**: ValueError로 명확히 거절한다.
 - **OpenAI 응답 비JSON**: provider가 `NewsProviderError`로 실패해야 하며, 실패 run log 테이블은 후속 구현 대상이다.
 - **OpenAI 검색 품질**: 실제 smoke 중 유사 요약 반복과 허용 목록 밖 risk tag가 관찰됐다. ingestion title/summary dedupe와 provider risk tag allowlist 필터를 추가해 DB 저장 경계를 보강했다. source 신뢰도/ranking은 후속 개선 필요.
+- **refresh 무단 호출**: `KR_STOCK_REFRESH_TOKEN`과 Bearer token이 없거나 다르면 `401`.
+- **비용 한도**: 프로세스 단위 보수적 reservation으로 예상 일일 한도 초과 요청을 OpenAI 호출 전에 차단한다.
 
 ---
 

@@ -4,14 +4,15 @@ import json
 import threading
 from datetime import date, timedelta
 from http.server import ThreadingHTTPServer
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
 
 from ai.kr_stock_signal.models import DailyNewsScore, NewsItem
 from ai.kr_stock_signal.news import build_daily_news_score, build_news_feature, validate_news_item
-from ai.kr_stock_signal.ingestion import NewsIngestionService, NewsProvider
-from ai.kr_stock_signal.openai_news import _items_from_payload
+from ai.kr_stock_signal.ingestion import NewsIngestionService, NewsProvider, NewsProviderError
+from ai.kr_stock_signal.openai_news import OpenAINewsProvider, _items_from_payload
 from ai.kr_stock_signal.repository import (
     KrStockRepository,
     SupabaseRepository,
@@ -167,25 +168,26 @@ def test_news_ingestion_service_persists_items_and_daily_score(tmp_path):
 
 
 def test_openai_news_payload_mapping_is_schema_validated_by_news_layer():
+    payload = {
+        "symbol": "005930.KS",
+        "items": [
+            {
+                "title": "삼성전자 실적 기대",
+                "source": "example",
+                "url": "https://example.com/1",
+                "published_at": "2026-06-06",
+                "summary_ko": "삼성전자 실적 기대가 커지며 반도체 업황 개선 가능성이 언급됐습니다.",
+                "sentiment_score": 2,
+                "impact_score": 2,
+                "relevance_score": 3,
+                "novelty": "NEW",
+                "risk_tags": ["earnings"],
+                "confidence": "MEDIUM",
+            }
+        ],
+    }
     items = _items_from_payload(
-        {
-            "symbol": "005930.KS",
-            "items": [
-                {
-                    "title": "삼성전자 실적 기대",
-                    "source": "example",
-                    "url": "https://example.com/1",
-                    "published_at": "2026-06-06",
-                    "summary_ko": "삼성전자 실적 기대가 커지며 반도체 업황 개선 가능성이 언급됐습니다.",
-                    "sentiment_score": 2,
-                    "impact_score": 2,
-                    "relevance_score": 3,
-                    "novelty": "NEW",
-                    "risk_tags": ["earnings", "market_volatility"],
-                    "confidence": "MEDIUM",
-                }
-            ],
-        },
+        payload,
         expected_symbol="005930.KS",
         model="gpt-test",
         input_tokens=100,
@@ -195,6 +197,15 @@ def test_openai_news_payload_mapping_is_schema_validated_by_news_layer():
     assert items[0].model == "gpt-test"
     assert items[0].input_tokens == 100
     assert items[0].risk_tags == ("earnings",)
+    payload["items"][0]["risk_tags"] = ["market_volatility"]
+    with pytest.raises(NewsProviderError, match="unknown risk tags"):
+        _items_from_payload(
+            payload,
+            expected_symbol="005930.KS",
+            model="gpt-test",
+            input_tokens=100,
+            output_tokens=50,
+        )
 
 
 class FakeHTTPResponse:
@@ -291,10 +302,11 @@ def test_supabase_legacy_service_role_key_uses_bearer_header(monkeypatch):
     assert requests[0].headers["Authorization"] == "Bearer legacy.jwt.service-role"
 
 
-def test_kr_stock_news_http_api_refresh_daily_and_feature(tmp_path):
+def test_kr_stock_news_http_api_refresh_daily_and_feature(tmp_path, monkeypatch):
     repo = KrStockRepository(tmp_path / "api.db")
     repo.initialize()
     KrStockNewsHandler.repository = repo
+    monkeypatch.setenv("KR_STOCK_REFRESH_TOKEN", "refresh-test-token")
     server = ThreadingHTTPServer(("127.0.0.1", 0), KrStockNewsHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -309,7 +321,10 @@ def test_kr_stock_news_http_api_refresh_daily_and_feature(tmp_path):
                     "score_date": "2026-06-06",
                 }
             ).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Authorization": "Bearer refresh-test-token",
+                "Content-Type": "application/json",
+            },
             method="POST",
         )
         with urlopen(refresh) as response:
@@ -331,3 +346,88 @@ def test_kr_stock_news_http_api_refresh_daily_and_feature(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_refresh_api_rejects_missing_write_token(tmp_path, monkeypatch):
+    repo = KrStockRepository(tmp_path / "api.db")
+    repo.initialize()
+    KrStockNewsHandler.repository = repo
+    monkeypatch.setenv("KR_STOCK_REFRESH_TOKEN", "refresh-test-token")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), KrStockNewsHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = Request(
+            f"http://127.0.0.1:{server.server_port}/api/kr-stocks/news/refresh",
+            data=b'{"symbol":"005930.KS","provider":"sample"}',
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as error:
+            urlopen(request)
+        assert error.value.code == 401
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_invalid_provider_item_is_rejected_before_repository_write(tmp_path):
+    class InvalidProvider(NewsProvider):
+        def fetch_news_items(self, symbol: str) -> list[NewsItem]:
+            return [
+                NewsItem(
+                    symbol=symbol,
+                    title="invalid",
+                    summary_ko="짧음",
+                    sentiment_score=4,
+                    impact_score=1,
+                    relevance_score=1,
+                )
+            ]
+
+    repo = KrStockRepository(tmp_path / "invalid.db")
+    repo.initialize()
+    with pytest.raises(ValueError):
+        NewsIngestionService(repo, InvalidProvider()).ingest_symbol(
+            "005930.KS",
+            score_date="2026-06-07",
+        )
+    with repo.connect() as connection:
+        assert connection.execute("select count(*) from news_items").fetchone()[0] == 0
+        assert connection.execute("select count(*) from daily_news_scores").fetchone()[0] == 0
+
+
+def test_url_less_news_item_id_uses_collection_date():
+    base = dict(
+        symbol="005930.KS",
+        title="동일 제목",
+        summary_ko="동일 제목이 날짜별 기사로 수집되는 상황을 검증하기 위한 충분히 긴 요약입니다.",
+        sentiment_score=1,
+        impact_score=1,
+        relevance_score=1,
+    )
+    first = NewsItem(**base, collected_at="2026-06-07T00:00:00+09:00")
+    second = NewsItem(**base, collected_at="2026-06-08T00:00:00+09:00")
+    assert news_item_id(first) != news_item_id(second)
+    with pytest.raises(ValueError, match="require published_at or collected_at"):
+        news_item_id(NewsItem(**base))
+
+
+def test_openai_provider_enforces_daily_cost_limit_before_call(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_DAILY_COST_LIMIT_USD", "0.05")
+    monkeypatch.setenv("OPENAI_NEWS_MAX_REQUEST_COST_USD", "0.10")
+    monkeypatch.setattr("ai.kr_stock_signal.openai_news._budget_date", None)
+    monkeypatch.setattr("ai.kr_stock_signal.openai_news._reserved_cost_usd", 0.0)
+    called = False
+
+    def fail_if_called(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("OpenAI HTTP call must not run")
+
+    monkeypatch.setattr("ai.kr_stock_signal.openai_news._post_json", fail_if_called)
+    with pytest.raises(NewsProviderError, match="daily cost limit"):
+        OpenAINewsProvider().fetch_news_items("005930.KS")
+    assert called is False

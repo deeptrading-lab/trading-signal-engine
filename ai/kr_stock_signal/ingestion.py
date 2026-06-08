@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .models import DailyNewsScore, NewsItem
-from .news import build_daily_news_score, today_iso
+from .news import build_daily_news_score, today_iso, validate_news_item
 from .repository import NewsRepository, news_item_id
 from .watchlist import require_watchlist_symbol
 
@@ -48,7 +48,7 @@ class NewsIngestionService:
                 novelty=item.novelty,
                 risk_tags=item.risk_tags,
                 confidence=item.confidence,
-                collected_at=item.collected_at,
+                collected_at=item.collected_at or f"{target_date}T00:00:00+09:00",
                 prompt_version=item.prompt_version,
                 model=item.model,
                 input_tokens=item.input_tokens,
@@ -57,8 +57,10 @@ class NewsIngestionService:
             )
             for item in items
         ])
-        self.repository.upsert_news_items(normalized_items)
+        for item in normalized_items:
+            validate_news_item(item)
         daily_score = build_daily_news_score(watch.symbol, target_date, normalized_items)
+        self.repository.upsert_news_items(normalized_items)
         self.repository.upsert_daily_news_score(daily_score)
         return IngestionResult(
             symbol=watch.symbol,

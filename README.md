@@ -84,6 +84,8 @@ GET  /api/kr-stocks/news/feature?symbol=005930.KS&lookback_days=10
 공유 저장소는 `KR_STOCK_DB_BACKEND=supabase`로 선택하며 `SUPABASE_URL`과
 backend 전용 `SUPABASE_SECRET_KEY`를 `.env.local` 또는 배포 secret manager에
 설정한다. 프론트엔드는 Supabase에 직접 접근하지 않고 이 API를 호출한다.
+refresh 요청은 `KR_STOCK_REFRESH_TOKEN`을 Bearer token으로 전달해야 하며,
+`OPENAI_DAILY_COST_LIMIT_USD`와 `OPENAI_NEWS_MAX_REQUEST_COST_USD`로 비용을 제한한다.
 
 ### OpenAI
 

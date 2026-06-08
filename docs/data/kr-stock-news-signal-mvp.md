@@ -162,6 +162,7 @@ The next shared/remote storage target is Supabase Postgres Free tier.
 - Apply schema changes as versioned migrations.
 - Backend ingestion credentials must never be exposed to the frontend.
 - Prefer frontend access through this engine's HTTP API. Direct frontend reads require read-only RLS policies.
+- Invalid provider output is validated before any repository write.
 
 Tables:
 
@@ -189,6 +190,12 @@ Supabase migration checklist:
 5. Deny public writes; ingestion writes are backend-only.
 6. Add a read policy only for the tables/columns the frontend actually needs.
 7. Run sample ingestion twice and verify row counts do not increase from duplicates.
+
+Stable ID fallback:
+
+- URL이 있으면 URL을 사용한다.
+- URL이 없으면 title과 `published_at`을 사용한다.
+- URL과 `published_at`이 모두 없으면 ingestion이 채운 `collected_at` 날짜를 사용한다.
 
 ---
 
@@ -225,6 +232,7 @@ Required for the Supabase step:
 KR_STOCK_DB_BACKEND=supabase
 SUPABASE_URL=https://<project-ref>.supabase.co
 SUPABASE_SECRET_KEY=<local-only-secret>
+KR_STOCK_REFRESH_TOKEN=<random-backend-write-token>
 ```
 
 - Frontend reads through the engine HTTP API. It does not receive the backend

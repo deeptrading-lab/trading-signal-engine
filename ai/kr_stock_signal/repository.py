@@ -63,11 +63,14 @@ create table if not exists daily_news_scores (
 
 
 def news_item_id(item: NewsItem) -> str:
+    item_date = item.published_at or (item.collected_at or "")[:10]
+    if not item.url and not item_date:
+        raise ValueError("URL-less news items require published_at or collected_at")
     key = "|".join(
         [
             item.symbol,
             (item.url or item.title).strip().lower(),
-            item.published_at or "",
+            item_date,
         ]
     )
     return hashlib.sha256(key.encode("utf-8")).hexdigest()

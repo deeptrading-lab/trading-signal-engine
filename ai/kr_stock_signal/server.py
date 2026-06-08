@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -50,6 +51,9 @@ class KrStockNewsHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path != "/api/kr-stocks/news/refresh":
             self._send_json({"error": "not found"}, status=404)
+            return
+        if not self._is_refresh_authorized():
+            self._send_json({"error": "unauthorized"}, status=401)
             return
         try:
             payload = self._read_json_body()
@@ -104,7 +108,14 @@ class KrStockNewsHandler(BaseHTTPRequestHandler):
         origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
         self.send_header("Access-Control-Allow-Origin", origin)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+
+    def _is_refresh_authorized(self) -> bool:
+        expected = os.getenv("KR_STOCK_REFRESH_TOKEN", "")
+        authorization = self.headers.get("Authorization", "")
+        if not expected or not authorization.startswith("Bearer "):
+            return False
+        return secrets.compare_digest(authorization.removeprefix("Bearer ").strip(), expected)
 
     def log_message(self, format: str, *args: Any) -> None:
         return

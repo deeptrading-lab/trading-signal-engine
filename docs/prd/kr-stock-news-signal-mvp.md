@@ -59,6 +59,8 @@
 - 저장된 `daily_news_scores`만 사용해 최근 10일 뉴스 feature를 계산한다.
 - 로컬 컴퓨터가 켜져 있는 동안 scheduler가 정해진 주기로 뉴스 수집을 실행할 수 있게 설계한다.
 - CLI와 local HTTP API는 뉴스 refresh/query만 담당한다.
+- refresh API는 backend write token 인증을 필수로 하고, 조회 API는 읽기 전용이다.
+- OpenAI refresh는 요청별 최대 예상 비용을 일일 한도에서 예약해 호출 전에 비용 초과를 차단한다.
 
 ### Out Of Scope
 
@@ -260,7 +262,8 @@ GET  /api/kr-stocks/news/feature?symbol=005930.KS&lookback_days=10
 
 API 소비자는 Supabase에 직접 접근하지 않고 이 엔진 API를 경유한다. Supabase
 publishable key는 엔진 쓰기 인증에 사용하지 않으며, ingestion은 backend 전용
-secret으로만 수행한다.
+secret으로만 수행한다. `POST /refresh`는 `KR_STOCK_REFRESH_TOKEN`을
+`Authorization: Bearer ...`로 전달해야 한다.
 
 ---
 
@@ -281,6 +284,10 @@ secret으로만 수행한다.
 - Supabase 테이블은 RLS가 활성화되고 public read/write policy를 만들지 않는다.
 - `KR_STOCK_DB_BACKEND=supabase`일 때 엔진 API가 Supabase 저장 결과를 refresh/query한다.
 - `daily`와 `feature` API는 저장된 score만 반환하고 뉴스 원문을 재분석하지 않는다.
+- invalid score/summary/risk tag는 repository write 전에 거절된다.
+- URL과 발행일이 없는 기사는 수집일을 stable ID에 포함해 날짜 간 충돌을 막는다.
+- 인증 없는 refresh 요청은 `401`로 거절되고 OpenAI 호출을 실행하지 않는다.
+- OpenAI 일일 비용 한도 초과가 예상되면 provider 호출 전에 거절된다.
 
 ---
 

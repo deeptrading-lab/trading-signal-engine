@@ -462,3 +462,12 @@ A·F·B 모든 즉시 가능 트랙 종결. 다음 세션은 P2 누적 follow-up
   - `/api/kr-stocks/news/feature` 정상, `news_score_10d=6.0`.
 - 검증용 서버 종료 완료.
 - 남은 사용자 작업은 채팅에 노출된 secret rotate와 새 secret의 `.env.local`/배포 secret 설정.
+
+### 1차 reviewer 변경 요청 반영
+
+- 저장 전 validation으로 순서를 변경해 invalid provider 출력이 DB에 남지 않게 했다.
+- refresh API에 `KR_STOCK_REFRESH_TOKEN` Bearer 인증을 추가했다.
+- OpenAI 호출 전 일일 비용 reservation 가드를 추가했다.
+- 허용 목록 밖 risk tag는 조용히 제거하지 않고 provider 오류로 거절한다.
+- URL/발행일이 없는 기사는 수집일을 stable ID에 포함한다.
+- 관련 회귀 테스트 4건을 추가했고 국내 주식 모듈 14건이 통과했다.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import date
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -28,6 +29,9 @@ ALLOWED_RISK_TAGS = {
     "valuation",
     "liquidity",
 }
+_budget_lock = threading.Lock()
+_budget_date: str | None = None
+_reserved_cost_usd = 0.0
 
 
 class OpenAINewsProvider(NewsProvider):
@@ -40,19 +44,24 @@ class OpenAINewsProvider(NewsProvider):
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise NewsProviderError("OPENAI_API_KEY is not configured")
+        reservation = _reserve_daily_budget()
 
-        response = _post_json(
-            "https://api.openai.com/v1/responses",
-            {
-                "model": self.model,
-                "tools": [{"type": "web_search"}],
-                "tool_choice": "auto",
-                "input": _build_prompt(watch.symbol, watch.name_ko),
-                "max_output_tokens": 1200,
-            },
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout_seconds=self.timeout_seconds,
-        )
+        try:
+            response = _post_json(
+                "https://api.openai.com/v1/responses",
+                {
+                    "model": self.model,
+                    "tools": [{"type": "web_search"}],
+                    "tool_choice": "auto",
+                    "input": _build_prompt(watch.symbol, watch.name_ko),
+                    "max_output_tokens": 1200,
+                },
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout_seconds=self.timeout_seconds,
+            )
+        except Exception:
+            _release_daily_budget(reservation)
+            raise
         usage = response.get("usage") or {}
         parsed = _parse_json_text(_extract_openai_text(response))
         return _items_from_payload(
@@ -160,11 +169,10 @@ def _items_from_payload(
         if not isinstance(raw, dict):
             continue
         risk_tags = raw.get("risk_tags") if isinstance(raw.get("risk_tags"), list) else []
-        normalized_risk_tags = tuple(
-            str(tag)
-            for tag in risk_tags
-            if str(tag) in ALLOWED_RISK_TAGS
-        )
+        normalized_risk_tags = tuple(str(tag) for tag in risk_tags)
+        unknown_tags = set(normalized_risk_tags) - ALLOWED_RISK_TAGS
+        if unknown_tags:
+            raise NewsProviderError(f"OpenAI news response contains unknown risk tags: {sorted(unknown_tags)}")
         confidence_value = str(raw.get("confidence") or "MEDIUM")
         try:
             confidence = Confidence(confidence_value)
@@ -200,6 +208,38 @@ def _optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _reserve_daily_budget() -> float:
+    global _budget_date, _reserved_cost_usd
+    today = date.today().isoformat()
+    daily_limit = _non_negative_float_env("OPENAI_DAILY_COST_LIMIT_USD", 0.50)
+    reservation = _non_negative_float_env("OPENAI_NEWS_MAX_REQUEST_COST_USD", 0.10)
+    with _budget_lock:
+        if _budget_date != today:
+            _budget_date = today
+            _reserved_cost_usd = 0.0
+        if _reserved_cost_usd + reservation > daily_limit:
+            raise NewsProviderError(
+                f"OpenAI daily cost limit would be exceeded: "
+                f"${_reserved_cost_usd + reservation:.2f} > ${daily_limit:.2f}"
+            )
+        _reserved_cost_usd += reservation
+    return reservation
+
+
+def _release_daily_budget(reservation: float) -> None:
+    global _reserved_cost_usd
+    with _budget_lock:
+        _reserved_cost_usd = max(0.0, _reserved_cost_usd - reservation)
+
+
+def _non_negative_float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    value = default if raw in (None, "") else float(raw)
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return value
 
 
 def _redact(text: str) -> str:
