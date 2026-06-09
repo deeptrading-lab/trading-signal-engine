@@ -1,24 +1,6 @@
-# ai/ 파이프라인 런타임 의존성.
-# PRD: docs/prd/cost-aware-llm-pipeline.md (§6 Python 3.11+)
-
-# Anthropic Messages API SDK. 재시도 allow-list 가 SDK 예외 클래스에 직접 의존하므로
-# 업그레이드 시 ai/llm/retry.py::RETRYABLE_EXCEPTIONS 동기화 필수.
-anthropic>=0.97.0
-
-# 코디네이터 인바운드 데몬(Socket Mode 클라이언트 포함).
-# PRD: docs/prd/slack-coordinator-inbound.md
-slack-bolt>=1.18
-
-# `.env` 자동 로딩 — 진입점에서 `load_dotenv(override=False)` 한 줄.
-# PRD: docs/prd/coordinator-dotenv-autoload.md
+fastapi>=0.115
+httpx>=0.27
+pydantic>=2.8
 python-dotenv>=1.0
-
-# OpenAI Responses API SDK.
-# PRD: docs/prd/bitcoin-allocation-mvp.md
-openai>=2.36.0
-
-# dev-relay 봇은 별도 레포 HY0118/dev-manager-bot 으로 분리됨.
-# claude-agent-sdk 의존성은 그 쪽 requirements.txt 에 둡니다.
-
-# 개발·테스트 의존성 (pytest 는 테스트 실행 시 필요).
-pytest>=8.0
+uvicorn>=0.30
+websockets>=13.0

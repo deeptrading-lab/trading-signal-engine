@@ -924,3 +924,31 @@
   2. ingestion_runs와 비용/실패 로그 저장
   3. 프론트엔드 API 연동 smoke
   4. 채팅에 노출된 Supabase secret rotate 및 배포 secret 설정
+
+### 2026-06-09 — Engine을 Supabase CRUD 및 KIS market data stream으로 전면 재구축
+
+- **slug**: `market-data-engine-rebuild` · **author**: Codex
+- **브랜치**: `feature/market-data-engine-rebuild`
+- **요약**: Engine의 책임을 AWS 상시 실행형 Supabase CRUD와 한국투자증권
+  REST/WebSocket market data stream으로 재정의했다. 기존 OpenAI/Anthropic,
+  뉴스 수집·점수화, Bitcoin allocation, Slack coordinator, SQLite runtime과 관련
+  테스트·문서·의존성을 제거했다.
+- **구현**:
+  - instrument 및 opaque external analysis CRUD
+  - KIS OAuth/approval key, 일·주·월·당일 분봉 동기화
+  - `H0STCNT0` 실시간 체결 parsing과 client WebSocket broadcast
+  - bounded queue 기반 tick/candle batch persistence와 1분봉 aggregation
+  - Supabase migration/RLS, Docker/App Runner entrypoint, health 상태
+  - 운영 requirements와 개발 requirements 분리
+- **검증**:
+  - `.venv/bin/python -m pytest ai/tests/ -q` → 6 passed
+  - `.venv/bin/python -m compileall -q ai` → pass
+  - `git diff --check` → pass
+  - Uvicorn local `/health` → 200 OK
+  - `pip check` → no broken requirements
+- **미실행**: 실제 Supabase migration/CRUD 및 KIS 장중 stream은 운영 credential과
+  장중 환경이 필요해 후속으로 남겼다.
+- **다음 작업**:
+  1. `market-data-supabase-migration-smoke`: 기존 뉴스 데이터 export 여부 결정
+  2. 새 Supabase migration 적용과 instrument/external analysis real CRUD smoke
+  3. KIS candle sync 및 장중 `H0STCNT0` stream smoke

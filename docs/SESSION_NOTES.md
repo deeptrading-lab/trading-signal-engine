@@ -488,3 +488,46 @@ A·F·B 모든 즉시 가능 트랙 종결. 다음 세션은 P2 누적 follow-up
 - refresh/daily/feature API 요청 예시와 Bearer 인증 설명.
 - 환경변수 표, 프로젝트 구조, 완료 기능과 다음 작업 정리.
 - Bitcoin allocation engine은 `기존 호환 기능` 섹션으로 축소.
+
+---
+
+## 2026-06-09 — Engine을 CRUD 및 KIS market data stream으로 전면 재구축
+
+**요약**: 사용자가 제품 방향을 다시 확정했다. Engine은 더 이상 OpenAI/news
+analysis/signal을 수행하지 않고, AWS에서 실행되는 Supabase CRUD와 한국투자증권
+REST/WebSocket market data stream backend만 담당한다.
+
+### 결정·합의 사항
+
+- 다른 서비스가 만든 뉴스·분석 결과는 opaque JSON으로 받아 Supabase에 CRUD한다.
+- KIS에서 실시간 체결·거래량을 받고, 분봉·일봉·주봉·월봉을 공통 candle schema로
+  저장한다.
+- 실시간 tick은 1분봉으로 집계하고 Engine WebSocket client에 중계한다.
+- 기존 코드가 아깝더라도 새 책임과 무관한 Bitcoin, LLM, 뉴스 점수화, Slack
+  coordinator, SQLite 기능은 전부 제거한다.
+- 주문·계좌·매수/매도 판단·뉴스 수집은 out of scope다.
+
+### 구현
+
+- `docs/prd/market-data-engine-rebuild.md`와 데이터 계약 작성.
+- `ai/market_data_engine` FastAPI, Supabase repository, KIS REST/WebSocket client,
+  stream service 구현.
+- instrument/external analysis CRUD, tick/candle 조회, candle sync,
+  `/ws/market`, `/health` 추가.
+- 이전 분석 runtime·테스트·문서·의존성·환경변수 제거.
+- Supabase migration을 새 4개 table로 교체하고 이전 뉴스 table drop 포함.
+- Docker/App Runner/README/PROJECT_STATUS를 새 엔진 기준으로 변경.
+
+### 검증
+
+- pytest: 6 passed.
+- compileall, `git diff --check`: pass.
+- Uvicorn local `/health`: 200 OK.
+- 실제 Supabase/KIS smoke는 credential과 장중 연결이 필요해 미실행.
+
+### 다음 작업
+
+1. Supabase migration 적용 전 기존 뉴스 데이터 export 필요 여부 확인.
+2. migration 적용과 real CRUD smoke.
+3. KIS 모의/실전 credential로 candle 및 장중 stream smoke.
+4. AWS secret 설정과 장기 WebSocket 배포 환경 결정.
