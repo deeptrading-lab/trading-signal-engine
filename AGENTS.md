@@ -30,7 +30,7 @@
 
 한 대화 안에서도 역할을 명시해 전환합니다. 예: `역할: PM으로 PRD만 작성해줘`.
 
-각 에이전트는 **서로를 견제하고 보완**하는 구조입니다. 이 저장소는 백엔드 엔진 프로젝트이므로 UX/UI·Frontend Dev 역할을 두지 않습니다. 화면·디자인 구현은 별도 프론트엔드 저장소에서 다루고, 이 저장소의 역할은 데이터 수집·저장·신호 산출·검증·운영에 집중합니다.
+각 에이전트는 **서로를 견제하고 보완**하는 구조입니다. 이 저장소는 백엔드 엔진 프로젝트이므로 UX/UI·Frontend Dev 역할을 두지 않습니다. 화면·디자인 구현은 별도 프론트엔드 저장소에서 다루고, 이 저장소의 역할은 Supabase CRUD·KIS 시세 수집·WebSocket 스트림·검증·운영에 집중합니다. 투자 판단·뉴스 분석·주문은 이 저장소의 범위가 아닙니다.
 
 ### Codex 운용 매핑
 
@@ -39,8 +39,8 @@ Codex에서는 별도 커스텀 에이전트 런타임보다 이 파일을 단�
 | Codex 역할 | 사용 시점 | 핵심 책임 |
 |---|---|---|
 | `planner` | 요구 정리·범위 확정 | PRD 초안, 수용 기준, 비범위 정리 |
-| `data-news-worker` | 뉴스·가격 데이터 수집/저장 설계 | provider, ingestion, scoring schema, 비용/품질 가드 |
-| `backend-worker` | `ai/`, local API, DB 구현 | Python 분석/LLM/스케줄러/도메인 로직 구현 |
+| `market-data-worker` | 가격 데이터 수집/저장 설계 | KIS provider, tick/candle schema, stream 품질 가드 |
+| `backend-worker` | `ai/`, API, DB 구현 | Python CRUD/WebSocket/repository 구현 |
 | `qa-checker` | 구현 후 검증 | PRD AC별 테스트 매핑, 자동/수동 검증 기록 |
 | `reviewer` | 머지 전 점검 | 범위 이탈, 보안, 구조, 테스트 누락 리뷰 |
 | `devops` | push·배포·운영 | 유효한 커밋만 push, CI/CD·알림·운영 점검 |
@@ -50,9 +50,9 @@ Codex가 작업을 시작할 때는 먼저 `docs/SESSION_NOTES.md` 최신 1~2개
 | # | 역할 | 하는 일 | 하지 않는 일(원칙) |
 |---|------|-----------|---------------------|
 | 1 | **PM (기획)** | 비즈니스 가치·비용 판단, 사용자 요구를 **PRD**로 정리해 개발에 넘김 | 구현·커밋·push |
-| 2 | **Data/News Analyst** | 종목·가격·뉴스 source, 점수화 기준, DB 저장 feature, 비용 가드 설계 | 최종 매수/매도 로직 임의 구현·PRD 밖 source 추가 |
-| 3 | **Backend Dev** | `ai/` Python 엔진, local API, scheduler, DB repository 구현. **한글 요약** 커밋 | PRD 없이 범위 임의 확장 |
-| 4 | **QA (검증)** | PRD의 **수용 기준(AC)** → 테스트 항목·체크리스트 → 실행. 에지 케이스(예: 뉴스 API 장애·가격 provider 장애·DB lock) 포함 | PRD와 무관한 임의 테스트만으로 통과 판정 |
+| 2 | **Market Data Analyst** | KIS source, tick/candle schema, 보존·중복·장애 정책 설계 | 투자 판단 구현·PRD 밖 source 추가 |
+| 3 | **Backend Dev** | `ai/market_data_engine`, API, WebSocket, Supabase repository 구현. **한글 요약** 커밋 | PRD 없이 범위 임의 확장 |
+| 4 | **QA (검증)** | PRD의 **수용 기준(AC)** → 테스트 항목·체크리스트 → 실행. KIS·WebSocket·Supabase 장애 포함 | PRD와 무관한 임의 테스트만으로 통과 판정 |
 | 5 | **Code Reviewer** | PR의 **코드 퀄리티·아키텍처·클린 코드** 감시, 머지 승인 게이트 | PRD 수용 테스트 실행(= QA 영역) |
 | 6 | **DevOps (배포)** | **유효한 커밋**일 때만 `git push`, 로컬/원격 실행·스케줄러·비용 모니터링 관리 | 실패한 테스트·깨진 빌드 상태에서 push |
 | + | **Manager (관찰·보고)** | 전체 slug 현황·블록·우선순위를 **read-only**로 조회해 리포트. `/status` 커맨드 진입점. | 라벨 변경·머지·파일 쓰기·다른 에이전트 실행 트리거 |
@@ -62,7 +62,7 @@ Codex가 작업을 시작할 때는 먼저 `docs/SESSION_NOTES.md` 최신 1~2개
 ```text
 요구 → PM(PRD)
         ↓
-   Data/News(데이터·뉴스 source와 점수화 설계)
+   Market Data(KIS source와 tick/candle 설계)
         ↓
    Backend Dev (엔진·DB·API·스케줄러 구현 + 한글 요약 commit)
         ↓
@@ -77,7 +77,7 @@ Codex가 작업을 시작할 때는 먼저 `docs/SESSION_NOTES.md` 최신 1~2개
 
 ## PRD (PM 산출물)
 
-Data/News Analyst·Backend Dev·QA·Code Reviewer가 동일한 기준을 쓰도록 PRD는 아래를 **채워서** 작성합니다.
+Market Data Analyst·Backend Dev·QA·Code Reviewer가 동일한 기준을 쓰도록 PRD는 아래를 **채워서** 작성합니다.
 
 1. **배경 / 문제** — 왜 하는가  
 2. **목표** — 무엇이 달라지면 성공인가  
@@ -87,21 +87,21 @@ Data/News Analyst·Backend Dev·QA·Code Reviewer가 동일한 기준을 쓰도�
 6. **가정·제약** — 기술·일정·비용 등  
 7. **참고** — 링크, 이슈 번호, 관련 파일 경로  
 
-PM은 PRD만 전달하고, Data/News Analyst와 Backend Dev는 **PRD에 없는 source·schema·API·신호 로직을 임의로 넣지 않습니다.** 모호하면 PM에게 되물은 뒤 PRD를 갱신합니다.
+PM은 PRD만 전달하고, Market Data Analyst와 Backend Dev는 **PRD에 없는 source·schema·API를 임의로 넣지 않습니다.** 모호하면 PM에게 되물은 뒤 PRD를 갱신합니다.
 
 ---
 
-## Data/News Analyst 산출물
+## Market Data Analyst 산출물
 
-뉴스·가격·공시·거래 데이터가 PRD에 포함될 때 합류합니다.
+가격·체결·거래량·캔들 데이터가 PRD에 포함될 때 합류합니다.
 
-- **데이터 source 설계**: provider 후보, 비용, rate limit, 장애 fallback, 저장 필요성, 보존 기간.
-- **뉴스 점수화 기준**: sentiment/impact/relevance/novelty/risk tag 정의와 LLM structured output schema.
-- **DB feature 설계**: 원문 대신 저장할 압축 feature, 중복 제거 key, aggregation window, decay 정책.
-- **검증 기준**: provider 장애, schema validation 실패, 중복 뉴스, 비용 한도 초과, stale data 처리.
-- **핸드오프 산출물**: Backend Dev가 바로 구현할 수 있는 source 목록, schema 초안, scoring rule, edge case.
+- **데이터 source 설계**: KIS endpoint, rate limit, 장애 fallback, 저장 필요성, 보존 기간.
+- **stream 계약**: provider frame을 tick/candle schema로 매핑하고 subscription 정책을 정의.
+- **DB 설계**: 중복 제거 key, aggregation window, retention 정책.
+- **검증 기준**: provider 장애, schema validation 실패, 중복 tick, stale data, 재연결 처리.
+- **핸드오프 산출물**: Backend Dev가 바로 구현할 수 있는 endpoint 목록, schema, mapping, edge case.
 
-Data/News Analyst는 코드 구현·커밋·머지 승인을 하지 않습니다. 새 외부 source나 점수화 정책이 필요하면 PRD 또는 별도 데이터 설계 문서에 명시합니다.
+Market Data Analyst는 코드 구현·커밋·머지 승인을 하지 않습니다. 새 외부 source나 저장 정책이 필요하면 PRD 또는 별도 데이터 설계 문서에 명시합니다.
 
 ---
 
@@ -113,9 +113,9 @@ Data/News Analyst는 코드 구현·커밋·머지 승인을 하지 않습니다
 
 예시:
 
-- `README에 Slack MVP 및 에이전트 역할 반영`  
-- `AI 서비스에 비트코인 배분 분석 엔드포인트 추가`  
-- `Slack 웹훅 전송 실패 시 재시도 로직 추가`  
+- `외부 분석 결과 CRUD 엔드포인트 추가`
+- `한투 실시간 체결 WebSocket 연결 추가`
+- `분봉 집계 실패 시 재연결 상태 기록`
 
 ---
 
@@ -124,7 +124,7 @@ Data/News Analyst는 코드 구현·커밋·머지 승인을 하지 않습니다
 1. PRD의 **수용 기준**마다 최소 1개 이상의 검증 항목을 만든다.  
 2. 각 항목은 **재현 절차**와 **기대 결과**를 적는다.  
 3. 자동화 테스트가 있으면 실행하고, 없으면 수동 체크리스트로라도 남긴다.  
-4. **에지 케이스**(거래소 서버 다운·네트워크 지연·API 레이트리밋·뉴스 피드 장애 등)를 별도 섹션으로 정리한다.
+4. **에지 케이스**(KIS 서버 다운·네트워크 지연·API 레이트리밋·WebSocket 재연결·Supabase 장애 등)를 별도 섹션으로 정리한다.
 5. 실패 시 **재현 조건·로그·스크린샷(필요 시)**를 남기고 개발자에게 되돌린다.  
 6. 검증이 끝나면 결과를 **한 덩어리의 산출물**(통과/실패 목록, 실패 항목의 재현 절차·기대 대비 실제)로 정리해 **개발자에게 전달**한다. 수정이 필요하면 PRD 범위 안에서 무엇을 고쳐야 하는지 명시한다.
 
@@ -153,7 +153,7 @@ Data/News Analyst는 코드 구현·커밋·머지 승인을 하지 않습니다
 추가로 DevOps는 다음을 책임진다.
 
 - **CI/CD 파이프라인** 정의·유지, 배포 산출물 버전 관리
-- **Slack 알림** 자동화(MVP 단계 핵심 채널), 장애·실패 알림 경로 확보
+- KIS/Supabase/WebSocket 장애·실패 알림 경로 확보
 - **인프라 비용 모니터링** (`README.md`의 Cost Strategy 범위 내 유지)
 - 운영 환경 헬스체크·로그 수집·경보 구성
 - **머지 후 브랜치 정리**: 로컬·원격 feature 브랜치, QA/Reviewer가 만든 `pr-<N>` 체크아웃 ref를 정리한다. 헬퍼는 `scripts/cleanup-merged-branches.sh`. GitHub UI로 직접 머지한 경우에도 이 정리는 수동으로 수행해야 한다(상세는 `.claude/agents/devops.md` §"머지 후 정리")
@@ -162,7 +162,7 @@ Data/News Analyst는 코드 구현·커밋·머지 승인을 하지 않습니다
 
 ## Cursor 사용 시 팁
 
-- 큰 작업은 `PM → Data/News → Backend Dev → QA → Code Reviewer → DevOps` 순으로 **한 번에 한 역할**을 요청하면 산출물이 섞이지 않는다.
+- 큰 작업은 `PM → Market Data → Backend Dev → QA → Code Reviewer → DevOps` 순으로 **한 번에 한 역할**을 요청하면 산출물이 섞이지 않는다.
 - “PRD 초안만”, “데이터 source 설계만”, “이 PRD로 구현만”, “PRD 기준 테스트 계획만”, “PR 리뷰만”처럼 **출력물을 한 가지로 제한**한다.
 - 역할·스택 힌트: `docs/agents/`의 해당 파일을 열어 두거나, 메시지에 `역할: QA`처럼 명시한다.
 
@@ -175,11 +175,11 @@ Data/News Analyst는 코드 구현·커밋·머지 승인을 하지 않습니다
 | 역할 | 입력 | 출력 | 트리거 (라벨/상태) | 다음 |
 |------|------|------|--------------------|------|
 | PM | 사용자 아이디어, GitHub Issue | `docs/prd/<slug>.md` + Issue 업데이트 | 라벨 `prd-requested` | `prd-ready` |
-| Data/News | `docs/prd/<slug>.md` | `docs/data/<slug>.md` (필요 시) | 라벨 `prd-ready` + 데이터 source/뉴스/DB 범위 | `data-ready` |
+| Market Data | `docs/prd/<slug>.md` | `docs/data/<slug>.md` (필요 시) | 라벨 `prd-ready` + provider/stream/DB 범위 | `data-ready` |
 | Backend Dev | `docs/prd/<slug>.md` + `docs/data/<slug>.md` (있을 때) | 브랜치 `feature/<slug>` + PR | 라벨 `prd-ready` / `data-ready` | PR + `impl-ready` |
 | QA | PRD + PR diff | `docs/qa/<slug>.md` | 라벨 `impl-ready` | `qa-passed` / `qa-failed` |
 | Code Reviewer | PR diff + `docs/qa/<slug>.md` | PR 리뷰 코멘트 | 라벨 `qa-passed` | `review-approved` / `review-changes-requested` |
-| DevOps | 승인된 PR | 머지 + push + Slack 알림 | 라벨 `review-approved` | `devops-ready` |
+| DevOps | 승인된 PR | 머지 + push + 운영 알림 | 라벨 `review-approved` | `devops-ready` |
 
 ### slug 규칙
 - kebab-case, 기능 단위: `slack-signal-approval`, `kis-rate-limit-retry`
@@ -189,7 +189,7 @@ Data/News Analyst는 코드 구현·커밋·머지 승인을 하지 않습니다
 ```
 docs/
 ├── prd/<slug>.md         # PM 산출물
-├── data/<slug>.md        # Data/News 산출물 (데이터 source·뉴스·DB 설계 필요 시)
+├── data/<slug>.md        # Market Data 산출물 (provider·stream·DB 설계 필요 시)
 └── qa/<slug>.md          # QA 리포트
 ```
 

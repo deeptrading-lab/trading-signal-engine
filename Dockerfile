@@ -12,4 +12,4 @@ COPY ai /app/ai
 
 EXPOSE 8000
 
-CMD ["python", "-m", "ai.stock_signal.server"]
+CMD ["python", "-m", "ai.market_data_engine.server"]

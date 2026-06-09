@@ -5,7 +5,7 @@ build:
     build:
       - pip install -r ai/requirements.txt
 run:
-  command: python -m ai.stock_signal.server
+  command: python -m ai.market_data_engine.server
   network:
     port: 8000
     env: PORT
